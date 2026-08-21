@@ -528,8 +528,43 @@ function addBuilding(walls, roofs, rings, minH, maxH, col, roofCol){
   }
 }
 
-/* Flat polygon (water, parks, squares) at height y */
-function addFlat(buf, rings, y, col, uvScale){
+const triNormal = (A,B,C) => {
+  const ux=B[0]-A[0], uy=B[1]-A[1], uz=B[2]-A[2];
+  const vx=C[0]-A[0], vy=C[1]-A[1], vz=C[2]-A[2];
+  let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+  const L=Math.hypot(nx,ny,nz)||1;
+  return [nx/L, ny/L, nz/L];
+};
+
+/* Split a triangle until the ground stops disagreeing with the flat version of
+   it by more than a quarter of a metre. On level ground that is no split at
+   all, so Amsterdam costs exactly what it did before; on a hillside it
+   tessellates only where the slope actually bends. */
+function flatTri(buf, a, b, c, off, col, s, depth){
+  if(depth < 6){
+    const mid = (p,q) => { const x=(p.x+q.x)/2, y=(p.y+q.y)/2;
+                           return { x, y, h: groundAt(x, -y) }; };
+    const ab = mid(a,b), bc = mid(b,c), ca = mid(c,a);
+    const err = Math.max(Math.abs(ab.h - (a.h+b.h)/2),
+                         Math.abs(bc.h - (b.h+c.h)/2),
+                         Math.abs(ca.h - (c.h+a.h)/2));
+    if(err > 0.25){
+      flatTri(buf, a, ab, ca, off, col, s, depth+1);
+      flatTri(buf, ab, b, bc, off, col, s, depth+1);
+      flatTri(buf, ca, bc, c, off, col, s, depth+1);
+      flatTri(buf, ab, bc, ca, off, col, s, depth+1);
+      return;
+    }
+  }
+  const A=[a.x, a.h+off, -a.y], B=[b.x, b.h+off, -b.y], C=[c.x, c.h+off, -c.y];
+  const N = triNormal(A,B,C);
+  buf.tri(A,B,C, N,N,N, [a.x*s,a.y*s],[b.x*s,b.y*s],[c.x*s,c.y*s], col);
+}
+
+/* Polygon at height y. With follow set, y is an offset above the ground and the
+   surface is tessellated to sit on it; without, it is a level sheet — which is
+   what water wants, since water does not run up a hill. */
+function addFlat(buf, rings, y, col, uvScale, follow){
   if(!rings.length || rings[0].length < 3) return;
   const outer = rings[0].slice();
   if(area2(outer) < 0) outer.reverse();
@@ -546,8 +581,14 @@ function addFlat(buf, rings, y, col, uvScale){
   for(const f of faces){
     const a = flat[f[0]], b = flat[f[1]], c = flat[f[2]];
     if(!a||!b||!c) continue;
-    buf.tri([a.x,y,-a.y],[b.x,y,-b.y],[c.x,y,-c.y], UP,UP,UP,
-            [a.x*s,a.y*s],[b.x*s,b.y*s],[c.x*s,c.y*s], col);
+    if(follow && demReady){
+      flatTri(buf, { x:a.x, y:a.y, h:groundAt(a.x,-a.y) },
+                   { x:b.x, y:b.y, h:groundAt(b.x,-b.y) },
+                   { x:c.x, y:c.y, h:groundAt(c.x,-c.y) }, y, col, s, 0);
+    } else {
+      buf.tri([a.x,y,-a.y],[b.x,y,-b.y],[c.x,y,-c.y], UP,UP,UP,
+              [a.x*s,a.y*s],[b.x*s,b.y*s],[c.x*s,c.y*s], col);
+    }
   }
 }
 
@@ -589,9 +630,11 @@ function addSkirt(buf, rings, top, bottom, col){
       if(len < 0.02) continue;
       const N = [dy/len, 0, dx/len];
       const u0 = run/TS, u1 = (run+len)/TS; run += len;
-      const v0 = bottom/TS, v1 = top/TS;
+      // the top of the wall follows the bank; the foot meets the water level
+      const t0 = groundAt(p0.x, -p0.y) + top, t1 = groundAt(p1.x, -p1.y) + top;
+      const v0 = bottom/TS, v1 = Math.max(t0,t1)/TS;
       const A=[p0.x,bottom,-p0.y], B=[p1.x,bottom,-p1.y],
-            C=[p1.x,top,-p1.y],    D=[p0.x,top,-p0.y];
+            C=[p1.x,t1,-p1.y],     D=[p0.x,t0,-p0.y];
       buf.tri(A,B,C, N,N,N, [u0,v0],[u1,v0],[u1,v1], col);
       buf.tri(A,C,D, N,N,N, [u0,v0],[u1,v1],[u0,v1], col);
     }
@@ -618,7 +661,7 @@ function bridgeProfile(pts, maxRise){
   const rise = Math.min(maxRise, Math.max(0.45, L * 0.055));
   return seg.map(d => rise * Math.sin(Math.PI * (d/L)));
 }
-function addBridge(buf, pts, hs, width, col){
+function addBridge(buf, pts, hs, width, col){   // hs are absolute deck heights
   const h = width/2, s = 0.12, THICK = 0.45;
   for(let i=0;i<pts.length-1;i++){
     const p0 = pts[i], p1 = pts[i+1], y0 = hs[i], y1 = hs[i+1];
@@ -645,25 +688,27 @@ function addBridge(buf, pts, hs, width, col){
 }
 
 /* Road ribbon from a polyline */
-function addRibbon(buf, pts, width, y, col){
-  const h = width/2, UP = [0,1,0], s = 0.12;
+function addRibbon(buf, pts0, width, y, col){
+  // subdivide first, or a long straight would cut through a rise
+  const pts = demReady ? densify(pts0, 14) : pts0;
+  const h = width/2, s = 0.12;
+  const put = quad => {
+    const q  = quad.map(p => [p.x, groundAt(p.x, -p.y) + y, -p.y]);
+    const uv = quad.map(p => [p.x*s, p.y*s]);
+    const N1 = triNormal(q[0],q[1],q[2]), N2 = triNormal(q[0],q[2],q[3]);
+    buf.tri(q[0],q[1],q[2], N1,N1,N1, uv[0],uv[1],uv[2], col);
+    buf.tri(q[0],q[2],q[3], N2,N2,N2, uv[0],uv[2],uv[3], col);
+  };
   for(let i=0;i<pts.length-1;i++){
     const p0 = pts[i], p1 = pts[i+1];
     const dx = p1.x-p0.x, dy = p1.y-p0.y, len = Math.hypot(dx,dy);
     if(len < 0.05) continue;
     const ox = (dy/len)*h, oy = (-dx/len)*h;
-    const A={x:p0.x+ox,y:p0.y+oy}, B={x:p1.x+ox,y:p1.y+oy},
-          C={x:p1.x-ox,y:p1.y-oy}, D={x:p0.x-ox,y:p0.y-oy};
-    const q = [A,B,C,D].map(p=>[p.x,y,-p.y]);
-    const uv = [A,B,C,D].map(p=>[p.x*s,p.y*s]);
-    buf.tri(q[0],q[1],q[2], UP,UP,UP, uv[0],uv[1],uv[2], col);
-    buf.tri(q[0],q[2],q[3], UP,UP,UP, uv[0],uv[2],uv[3], col);
-    // square joint patch so corners don't gap
-    if(i < pts.length-2){
-      const j = [[p1.x-h,p1.y-h],[p1.x+h,p1.y-h],[p1.x+h,p1.y+h],[p1.x-h,p1.y+h]].map(p=>({x:p[0],y:p[1]}));
-      const jq = j.map(p=>[p.x,y,-p.y]), ju = j.map(p=>[p.x*s,p.y*s]);
-      buf.tri(jq[0],jq[1],jq[2], UP,UP,UP, ju[0],ju[1],ju[2], col);
-      buf.tri(jq[0],jq[2],jq[3], UP,UP,UP, ju[0],ju[2],ju[3], col);
+    put([{x:p0.x+ox,y:p0.y+oy}, {x:p1.x+ox,y:p1.y+oy},
+         {x:p1.x-ox,y:p1.y-oy}, {x:p0.x-ox,y:p0.y-oy}]);
+    if(i < pts.length-2){                    // patch the corner so it doesn't gap
+      put([{x:p1.x-h,y:p1.y-h},{x:p1.x+h,y:p1.y-h},
+           {x:p1.x+h,y:p1.y+h},{x:p1.x-h,y:p1.y+h}]);
     }
   }
 }
@@ -721,6 +766,19 @@ const parseLen = v => {
   if(/'|ft|feet/i.test(s)) n *= 0.3048;
   return n;
 };
+
+/* Lowest and highest ground under a footprint. A building is stood on the high
+   side so it never floats, and its walls are carried down past the low side so
+   the slope cuts into them rather than daylight showing underneath. */
+function ringGround(ring){
+  let mn = Infinity, mx = -Infinity;
+  for(const p of ring){
+    const g = groundAt(p.x, -p.y);
+    if(g < mn) mn = g;
+    if(g > mx) mx = g;
+  }
+  return mn > mx ? { min:0, max:0 } : { min:mn, max:mx };
+}
 
 function ringOf(ids, nodes){
   const out = [];
@@ -814,6 +872,113 @@ function blocked(x, z){
 }
 
 /* ------------------------------------------------------------ tile loader */
+/* ================================================================== terrain
+   Elevation from Terrarium tiles on AWS Open Data: 8-bit RGB where
+   height = R*256 + G + B/256 - 32768 metres. Free, no key, and CORS-open,
+   which matters because we have to read the pixels back off a canvas.
+
+   Sampled once per location into a regular grid in local metres, then
+   smoothed: at zoom 13 a pixel is about 12 m across, and in a dense city the
+   source is closer to a surface model than a bare-earth one, so rooftops leak
+   into it. Blurring costs us nothing real — we want the ground, not the roofs.
+   Everything is expressed relative to your landing point, so the scene stays
+   near y=0 whether you start in Rotterdam or La Paz. */
+const DEM_Z = 13, DEM_SPAN = 1600, DEM_STEP = 12;
+let demGrid = null, demN = 0, demBase = 0, demReady = false;
+
+const lonLatToTile = (lat, lon, z) => {
+  const n = Math.pow(2, z);
+  return { x: (lon + 180) / 360 * n,
+           y: (1 - Math.asinh(Math.tan(lat*Math.PI/180)) / Math.PI) / 2 * n };
+};
+
+function loadDemTile(tx, ty){
+  return new Promise(res => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas'); c.width = c.height = 256;
+        const g = c.getContext('2d', { willReadFrequently: true });
+        g.drawImage(img, 0, 0);
+        res(g.getImageData(0, 0, 256, 256).data);
+      } catch(e){ res(null); }
+    };
+    img.onerror = () => res(null);
+    img.src = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${DEM_Z}/${tx}/${ty}.png`;
+  });
+}
+
+function smoothGrid(g, N, passes){
+  const t = new Float32Array(g.length);
+  for(let p = 0; p < passes; p++){
+    for(let j = 0; j < N; j++) for(let i = 0; i < N; i++){
+      let sum = 0, k = 0;
+      for(let dj = -1; dj <= 1; dj++) for(let di = -1; di <= 1; di++){
+        const jj = j+dj, ii = i+di;
+        if(jj < 0 || jj >= N || ii < 0 || ii >= N) continue;
+        sum += g[jj*N + ii]; k++;
+      }
+      t[j*N + i] = sum / k;
+    }
+    g.set(t);
+  }
+}
+
+function sampleGrid(x, z){
+  const fi = (x + DEM_SPAN) / DEM_STEP, fj = (z + DEM_SPAN) / DEM_STEP;
+  let i = Math.floor(fi), j = Math.floor(fj);
+  i = i < 0 ? 0 : i > demN-2 ? demN-2 : i;
+  j = j < 0 ? 0 : j > demN-2 ? demN-2 : j;
+  const u = Math.min(1, Math.max(0, fi - i)), v = Math.min(1, Math.max(0, fj - j));
+  const a = demGrid[j*demN+i],     b = demGrid[j*demN+i+1];
+  const c = demGrid[(j+1)*demN+i], d = demGrid[(j+1)*demN+i+1];
+  return (a*(1-u) + b*u)*(1-v) + (c*(1-u) + d*u)*v;
+}
+
+/* Height of the ground under a point, in scene metres. Zero everywhere if the
+   DEM could not be fetched, which leaves the old flat world intact. */
+function groundAt(x, z){
+  return demReady ? sampleGrid(x, z) - demBase : 0;
+}
+
+async function loadDEM(){
+  demReady = false; demGrid = null;
+  try {
+    const dLat = DEM_SPAN / M_LAT, dLon = DEM_SPAN / mLon;
+    const nw = lonLatToTile(lat0 + dLat, lon0 - dLon, DEM_Z);
+    const se = lonLatToTile(lat0 - dLat, lon0 + dLon, DEM_Z);
+    const tx0 = Math.floor(nw.x), tx1 = Math.floor(se.x);
+    const ty0 = Math.floor(nw.y), ty1 = Math.floor(se.y);
+    const tiles = new Map(), jobs = [];
+    for(let tx = tx0; tx <= tx1; tx++) for(let ty = ty0; ty <= ty1; ty++)
+      jobs.push(loadDemTile(tx, ty).then(d => { if(d) tiles.set(tx+','+ty, d); }));
+    await Promise.all(jobs);
+    if(!tiles.size) return;
+
+    const N = Math.round(DEM_SPAN*2 / DEM_STEP) + 1;
+    const g = new Float32Array(N*N);
+    for(let j = 0; j < N; j++){
+      const z = -DEM_SPAN + j*DEM_STEP;
+      for(let i = 0; i < N; i++){
+        const ll = toLatLon(-DEM_SPAN + i*DEM_STEP, z);
+        const t = lonLatToTile(ll.lat, ll.lon, DEM_Z);
+        const tx = Math.floor(t.x), ty = Math.floor(t.y);
+        const d = tiles.get(tx+','+ty);
+        if(!d) continue;
+        const px = Math.min(255, Math.max(0, Math.floor((t.x - tx)*256)));
+        const py = Math.min(255, Math.max(0, Math.floor((t.y - ty)*256)));
+        const o = (py*256 + px)*4;
+        g[j*N+i] = (d[o]*256 + d[o+1] + d[o+2]/256) - 32768;
+      }
+    }
+    smoothGrid(g, N, 2);
+    demGrid = g; demN = N; demBase = 0;
+    demReady = true;
+    demBase = sampleGrid(0, 0);          // your landing point becomes y = 0
+  } catch(e){ console.warn('terrain unavailable, staying flat:', e); }
+}
+
 /* ---------------------------------------------------------------- tile cache
    Overpass is a free community service, and it firewalls IPs that lean on it —
    a refused connection rather than a polite 429. So every tile we fetch is kept
@@ -917,13 +1082,19 @@ function buildTile(json, gi, gj, bb){
 
   const walls = new Buf(), roofs = new Buf(), road = new Buf(),
         water = new Buf(), green = new Buf(), quay = new Buf();
-  // canals sit well below street level, behind a stone wall
-  const WATER_Y = -1.9;
+  // Canals sit 1.9 m below the bank behind a stone wall. Water is level, so the
+  // surface is set once from the ground at the middle of the body rather than
+  // being draped over the terrain like the land is.
   const waterRings = [];
   const addCanal = rings => {
-    if(rings[0] && rings[0].length > 2) waterRings.push(rings[0]);
-    addFlat(water, rings, WATER_Y, [1,1,1], 0.05);
-    addSkirt(quay, rings, 0.10, WATER_Y, [0.82, 0.80, 0.76]);
+    const r0 = rings[0];
+    if(!r0 || r0.length < 3) return;
+    waterRings.push(r0);
+    let cx = 0, cy = 0;
+    for(const p of r0){ cx += p.x; cy += p.y; }
+    const wy = groundAt(cx/r0.length, -cy/r0.length) - 1.9;
+    addFlat(water, rings, wy, [1,1,1], 0.05, false);
+    addSkirt(quay, rings, 0.10, wy, [0.82, 0.80, 0.76]);
   };
   const wayIds = new Set();
   const key = tkey(gi,gj);
@@ -945,12 +1116,15 @@ function buildTile(json, gi, gj, bb){
       min = isFinite(ml) ? ml * 3.25 : 0;
     }
     h = Math.max(min + 2.2, Math.min(h, 400));
+    const gr = ringGround(rings[0] || []);
+    const yTop = gr.max + h;
+    const yBot = min > 0 ? gr.max + min : gr.min - 1.5;
     const r = hash(id);
     const base = new THREE.Color(PALETTE[(r*PALETTE.length)|0]);
     const shade = 0.86 + hash(id*7+3)*0.3;
     const col = [base.r*shade, base.g*shade, base.b*shade];
     const rg = 0.30 + hash(id*13+7)*0.22;
-    addBuilding(walls, roofs, rings, min, h, col, [rg*0.95, rg, rg*1.06]);
+    addBuilding(walls, roofs, rings, yBot, yTop, col, [rg*0.95, rg, rg*1.06]);
     count++;
     // collision from the outer ring
     const o = rings[0];
@@ -997,7 +1171,7 @@ function buildTile(json, gi, gj, bb){
       seen.add(w.id); wayIds.add(w.id);
       const pts = ringOf(w.nodes, nodes);
       if(closed && (t.area === 'yes' || t.highway === 'pedestrian')){
-        addFlat(road, [pts], 0.05, [1,1,1], 0.12);
+        addFlat(road, [pts], 0.05, [1,1,1], 0.12, true);
       } else if(pts.length > 1){
         const src = w.nodes.map(id=>nodes.get(id)).filter(Boolean)
                      .map(n=>{ const p = toLocal(n.lat,n.lon); return {x:p.x, y:-p.z}; });
@@ -1007,7 +1181,9 @@ function buildTile(json, gi, gj, bb){
         const c = new THREE.Color(cl);
         if(t.bridge && t.bridge !== 'no'){
           const bp = densify(src, 2.5);
-          const hs = bridgeProfile(bp, 1.45);
+          const arch = bridgeProfile(bp, 1.45);
+          // lift the whole span onto the ground it springs from
+          const hs = arch.map((a, k) => a + groundAt(bp[k].x, -bp[k].y));
           addBridge(road, bp, hs, width, [c.r*1.06, c.g*1.06, c.b*1.06]);
           bridges.push({ pts:bp, hs, w:width/2 + 1.0, tile:key });
         } else {
@@ -1024,11 +1200,11 @@ function buildTile(json, gi, gj, bb){
     }
     else if(closed && (t.leisure || /^(grass|forest|meadow|village_green|recreation_ground|cemetery)$/.test(t.landuse||''))){
       seen.add(w.id); wayIds.add(w.id);
-      addFlat(green, [ringOf(w.nodes, nodes)], 0.03, [1,1,1], 0.06);
+      addFlat(green, [ringOf(w.nodes, nodes)], 0.03, [1,1,1], 0.06, true);
     }
     else if(closed && t.amenity === 'parking'){
       seen.add(w.id); wayIds.add(w.id);
-      addFlat(road, [ringOf(w.nodes, nodes)], 0.03, [0.62,0.62,0.63], 0.12);
+      addFlat(road, [ringOf(w.nodes, nodes)], 0.03, [0.62,0.62,0.63], 0.12, true);
     }
   }
 
@@ -1043,8 +1219,8 @@ function buildTile(json, gi, gj, bb){
     const cl = clipToRect(r, lx0+0.3, ly0+0.3, lx1-0.3, ly1-0.3);
     if(cl.length > 2) holes.push(cl);
   }
-  addFlat(land, [rect, ...holes], 0, [1,1,1], 0.35);
-  if(land.empty) addFlat(land, [rect], 0, [1,1,1], 0.35);   // holes defeated earcut
+  addFlat(land, [rect, ...holes], 0, [1,1,1], 0.35, true);
+  if(land.empty) addFlat(land, [rect], 0, [1,1,1], 0.35, true);  // holes defeated earcut
 
   const g = new THREE.Group();
   const push = (buf, mat, shadow) => {
@@ -1535,7 +1711,7 @@ function drawMap(){
 /* Height of any bridge deck under the walker, so you rise over the canal
    instead of clipping through the span. */
 function deckAt(x, z){
-  const y = -z; let best = 0;
+  const y = -z; let best = -1e9;
   for(const b of bridges){
     for(let i=0;i<b.pts.length-1;i++){
       const a = b.pts[i], c = b.pts[i+1];
@@ -2046,7 +2222,7 @@ function updatePeopleInner(dt){
   for(let k = 0; k < 6 && npcs.length; k++){
     gyCursor = (gyCursor + 1) % npcs.length;
     const n = npcs[gyCursor], p = npcPoint(n);
-    if(p) n.gy = deckAt(p.x, -p.y);
+    if(p) n.gy = Math.max(groundAt(p.x, -p.y), deckAt(p.x, -p.y));
   }
 
   faceCount[0] = faceCount[1] = faceCount[2] = faceCount[3] = 0;
@@ -2181,7 +2357,7 @@ function frame(){
     }
   }
 
-  const deck = deckAt(player.x, player.z);
+  const deck = Math.max(groundAt(player.x, player.z), deckAt(player.x, player.z));
   player.y += (deck - player.y) * Math.min(1, dt*9);      // ease onto the span
   const bob = player.speed ? Math.sin(player.bob)*0.035 : 0;
   camera.position.set(player.x, EYE + player.y + bob, player.z);
@@ -2199,7 +2375,9 @@ function frame(){
   animateArms(dt);
   updatePeople(dt);
   sky.position.copy(camera.position);
-  ground.position.set(Math.round(player.x/500)*500, -2.6, Math.round(player.z/500)*500);
+  ground.position.set(Math.round(player.x/500)*500,
+                      groundAt(player.x, player.z) - 3.0,
+                      Math.round(player.z/500)*500);
   sun.target.position.set(player.x, 0, player.z);
   sun.position.set(player.x + sunDir.x*200, Math.max(6, sunDir.y*200), player.z + sunDir.z*200);
 
@@ -2264,6 +2442,9 @@ async function go(lat, lon, label){
   updateSun();
   player.x = 0; player.z = 0; player.yaw = 0; player.pitch = 0;
 
+  showLoader('reading the lie of the land…');
+  await loadDEM();
+  showLoader('asking OpenStreetMap for buildings near ' + (label || 'you') + '…');
   try {
     const [gi, gj] = tileAt(0, 0);
     const n = await loadTile(gi, gj);
@@ -2391,7 +2572,8 @@ el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checke
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 colliders, roads, bridges, MAT, TEX, go, solarPosition,
-                arms, armL, armR, ARM, GUNS, WEAPONS, FACES, npcs, PARTS, BARS, BLOOD, junctions, npcPoint,
+                arms, armL, armR, ARM, GUNS, WEAPONS, FACES, npcs, groundAt,
+                dem: () => ({ ready:demReady, n:demN, base:+demBase.toFixed(2) }), PARTS, BARS, BLOOD, junctions, npcPoint,
                 peopleDebug: () => ({ npcs:npcs.length, nearSegs:nearSegs.length,
                   roads:roads.length, walkable:roads.filter(r=>r.walk).length,
                   junctions:junctions.size, pathsDirty, peopleOn,

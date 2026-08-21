@@ -60,6 +60,10 @@ Everything is public and free, and nothing is scraped.
   per tile as you move, from three mirrors with automatic failover.
 - **[Nominatim](https://nominatim.openstreetmap.org/)** — turns what you type into
   a latitude and longitude.
+- **[Terrarium elevation tiles](https://registry.opendata.aws/terrain-tiles/)**
+  on AWS Open Data — 8-bit RGB where `height = R*256 + G + B/256 - 32768` metres.
+  Free, no key, CORS-open, which matters because the pixels have to be read back
+  off a canvas.
 - **[three.js](https://threejs.org/) r169** — WebGL rendering. Vendored into
   `vendor/` (MIT, licence included) and wired up with an import map, so there is
   no CDN in the runtime path and the page cannot be broken by someone else's
@@ -90,6 +94,30 @@ Amsterdam is close to the ideal test case: in a sample tile of the Jordaan, 1289
 of 1470 buildings carry a surveyed height, because the Dutch BAG/3DBAG cadastre
 has been imported into OSM. Median building height 13.5 m, median footprint 78 m²
 — narrow canal houses, exactly right.
+
+**Terrain.** Elevation comes from Terrarium tiles at zoom 13, resampled once per
+location into a 12 m grid in local metres and expressed relative to your landing
+point, so the scene stays near y=0 whether you start in Rotterdam or La Paz.
+
+The field is blurred before use. At zoom 13 a pixel is about 12 m across and in a
+dense city the source behaves more like a surface model than a bare-earth one —
+Amsterdam's canal-side streets read 6.8 m because rooftops leak into the sample.
+Smoothing costs nothing real, since what we want is the ground, not the roofs.
+
+Surfaces are draped by adaptive tessellation: a triangle splits only while the
+ground disagrees with the flat version of it by more than 0.25 m. A uniformly
+*tilted* plane needs no splitting at all — only curvature does — so a hillside
+costs little and Amsterdam costs nothing. Measured: land came to 3229 triangles
+across four Amsterdam tiles and 150 on a San Francisco slope.
+
+Buildings are stood on the high side of their own footprint and their walls
+carried 1.5 m below the low side, so a slope cuts into them instead of daylight
+showing underneath. Water is the exception to draping: it is set level from the
+ground at the middle of each body, because water does not run up a hill, and the
+quay wall then follows the bank down to meet it. Roads are subdivided to 14 m
+before being ribboned, or a long straight would cut through a rise, and bridges
+spring from the ground at each end. If the DEM cannot be fetched, `groundAt`
+returns zero everywhere and the old flat world is intact.
 
 **Canals.** Water sits 1.9 m below street level behind a stone quay wall, which is
 what actually makes a canal read as a canal rather than blue paint. That means the
@@ -251,9 +279,6 @@ against their terms.
 
 ## Known limits
 
-- **The ground is flat.** There is no terrain elevation, so hilly cities are
-  wrong. Amsterdam does not care. Fixing this means sampling a DEM — Terrarium
-  tiles on AWS are free and CORS-friendly — and displacing everything by it.
 - **Roofs are flat.** No gables, spires or domes; OSM's `roof:shape` is ignored.
 - **You can walk over water.** Canals are not solid, because making them solid
   would strand you whenever a bridge is missing from the data. You float across.
