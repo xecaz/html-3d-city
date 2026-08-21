@@ -113,10 +113,23 @@ the actual zone — that comes from a one-shot lookup on `timeapi.io`, after whi
 falls back to longitude, which stays solar-sane but drifts from the wall clock by
 the DST offset.
 
-**Streaming.** The world is 600 m tiles. The one you land in loads first, the eight
-around it follow in the background, and more are queued as you walk. Ways are
-deduplicated by OSM id across tiles, and tiles more than two away are disposed of,
-so wandering for a long time does not grow without bound.
+**Streaming, politely.** The world is 600 m tiles, and the grid is pinned to the
+globe rather than to wherever you searched from — so two visits to the same
+street ask for the same cells whatever address you arrived by, and the second
+visit is free. Every tile is cached in IndexedDB for a fortnight, so reloads cost
+nothing at all.
+
+Tiles are fetched only when you can actually see into them: one while you are
+mid-cell, never more than four, instead of firing the whole surrounding nine the
+moment you land. One request is in flight at a time with a real pause between
+them, and Overpass pushing back triggers an exponential retreat rather than a
+retry storm. This matters — Overpass does not politely throttle a noisy client,
+it firewalls the IP, and a refused TCP connection surfaces in the browser as a
+bare `Failed to fetch`. If you see that, you are blocked rather than offline; it
+clears on its own.
+
+Ways are deduplicated by OSM id across tiles, and tiles more than two cells away
+are disposed of, so a long wander does not grow without bound.
 
 **Collision.** Building footprints go into a 24 m spatial grid; movement is tested
 against the polygons in the neighbouring cells and slides along walls rather than
@@ -169,8 +182,10 @@ against their terms.
 - **Interiors do not exist.** These are hollow shells with no doors.
 - **Landmark heights are guessed** when OSM has none, so the odd church tower is
   the wrong size.
-- **Overpass is a shared free service.** It rate-limits. If a tile fails to load
-  it is retried against another mirror; be decent about how hard you hammer it.
+- **Overpass is a shared free service** run on donated hardware. Tiles are cached
+  and paced to stay well inside its limits, but it is still someone else's
+  machine. Two of the three configured mirrors resolve to the same host, so the
+  failover is thinner than it looks.
 
 ## Poking at it
 

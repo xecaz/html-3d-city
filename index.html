@@ -279,7 +279,7 @@ function applySun(date){
   mixHex(hemi.groundColor, A.hg, B.hg, t);
   mixHex(sky.material.uniforms.top.value, A.top, B.top, t);
   mixHex(sky.material.uniforms.bot.value, A.bot, B.bot, t);
-  if(!scene.fog) scene.fog = new THREE.Fog(0xffffff, 90, 780);
+  if(!scene.fog) scene.fog = new THREE.Fog(0xffffff, 80, 500);
   mixHex(scene.fog.color, A.fog, B.fog, t);
 
   // windows come alight as the sun goes down
@@ -789,23 +789,100 @@ function blocked(x, z){
 }
 
 /* ------------------------------------------------------------ tile loader */
+/* ---------------------------------------------------------------- tile cache
+   Overpass is a free community service, and it firewalls IPs that lean on it —
+   a refused connection rather than a polite 429. So every tile we fetch is kept
+   in IndexedDB and re-read on the way back: reloads and revisits cost nothing. */
+const DB = 'html-city', STORE = 'tiles', CACHE_TTL = 14*24*3600*1000;
+let dbp;
+function idb(){
+  if(dbp) return dbp;
+  dbp = new Promise((res, rej) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if(!d.objectStoreNames.contains(STORE))
+        d.createObjectStore(STORE, { keyPath:'key' }).createIndex('at', 'at');
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
+  }).catch(() => null);                      // private mode / quota: just skip
+  return dbp;
+}
+async function cacheGet(key){
+  const d = await idb(); if(!d) return null;
+  return new Promise(res => {
+    let rq;
+    try { rq = d.transaction(STORE,'readonly').objectStore(STORE).get(key); }
+    catch(e){ return res(null); }
+    rq.onsuccess = () => {
+      const v = rq.result;
+      res(v && Date.now() - v.at < CACHE_TTL ? v.json : null);
+    };
+    rq.onerror = () => res(null);
+  });
+}
+async function cachePut(key, json){
+  const d = await idb(); if(!d) return;
+  try {
+    const tx = d.transaction(STORE, 'readwrite');
+    tx.onerror = () => {};        // over quota: the map still works, just slower
+    tx.objectStore(STORE).put({ key, at:Date.now(), json });
+  } catch(e){}
+}
+async function cachePrune(){
+  const d = await idb(); if(!d) return;
+  try {
+    const st = d.transaction(STORE,'readwrite').objectStore(STORE);
+    const rq = st.index('at').openCursor(IDBKeyRange.upperBound(Date.now() - CACHE_TTL));
+    rq.onsuccess = () => { const c = rq.result; if(c){ c.delete(); c.continue(); } };
+  } catch(e){}
+}
+cachePrune();
+
+/* ----------------------------------------------------------- the tile grid
+   Cells are pinned to the globe rather than to wherever you happened to search
+   from, so two visits to the same street ask for the same cells and hit the
+   cache no matter which address you arrived by. dLon is derived from the row
+   index, never from the current origin, which keeps the grid deterministic. */
 let TILE = 600;
-const tiles = new Map();           // "tx,ty" -> {group, ways:Set, state}
+const tiles = new Map();           // "gi,gj" -> {group, ways:Set, state}
 const seen  = new Set();           // OSM way/relation ids already built
-let pending = 0;
+let pending = 0, cacheHits = 0, netFetches = 0, lastFromCache = false;
 const queue = [];
 
-const tkey = (tx,ty) => tx + ',' + ty;
-const tileOf = (x,z) => [Math.round(x/TILE), Math.round(z/TILE)];
+const dLat   = () => TILE / M_LAT;
+const gjOf   = lat => Math.floor(lat / dLat());
+const dLonAt = gj  => TILE / (111320 * Math.max(0.05,
+                        Math.cos((gj + 0.5) * dLat() * Math.PI/180)));
+const giOf   = (lon, gj) => Math.floor(lon / dLonAt(gj));
 
-function tileBBox(tx, ty){
-  const x0 = tx*TILE - TILE/2, x1 = tx*TILE + TILE/2;
-  const z0 = ty*TILE - TILE/2, z1 = ty*TILE + TILE/2;
-  const a = toLatLon(x0, z1), b = toLatLon(x1, z0);   // z1 is further south
-  return [a.lat, a.lon, b.lat, b.lon];                // s,w,n,e
+const tkey = (gi,gj) => gi + ',' + gj;
+function tileBBox(gi, gj){
+  const dl = dLat(), dn = dLonAt(gj);
+  return [gj*dl, gi*dn, (gj+1)*dl, (gi+1)*dn];        // s,w,n,e
+}
+function tileAt(x, z){
+  const ll = toLatLon(x, z);
+  const gj = gjOf(ll.lat);
+  return [giOf(ll.lon, gj), gj];
 }
 
-function buildTile(json, tx, ty){
+/* Cells the walker can currently see into. Fetching just these, instead of the
+   whole 3x3 the moment you land, keeps the opening burst to one or two queries
+   and lets the rest arrive only if you actually walk that way. */
+const LOOK_AHEAD = 250;   // 1 tile mid-cell, never more than 4
+function neededTiles(){
+  const R = LOOK_AHEAD;
+  const sw = toLatLon(player.x - R, player.z + R);
+  const ne = toLatLon(player.x + R, player.z - R);
+  const out = [];
+  for(let gj = gjOf(sw.lat); gj <= gjOf(ne.lat); gj++)
+    for(let gi = giOf(sw.lon, gj); gi <= giOf(ne.lon, gj); gi++) out.push([gi, gj]);
+  return out;
+}
+
+function buildTile(json, gi, gj, bb){
   const nodes = new Map(), ways = new Map(), rels = [];
   for(const e of json.elements || []){
     if(e.type === 'node') nodes.set(e.id, e);
@@ -824,7 +901,7 @@ function buildTile(json, tx, ty){
     addSkirt(quay, rings, 0.10, WATER_Y, [0.82, 0.80, 0.76]);
   };
   const wayIds = new Set();
-  const key = tkey(tx,ty);
+  const key = tkey(gi,gj);
   let count = 0;
 
   const buildingFrom = (rings, tags, id) => {
@@ -931,8 +1008,8 @@ function buildTile(json, tx, ty){
   // Land for this tile, with the canals punched out of it. One flat quad per
   // tile tiles seamlessly with its neighbours and leaves the water visible.
   const land = new Buf();
-  const lx0 = tx*TILE - TILE/2, lx1 = tx*TILE + TILE/2;
-  const ly0 = -(ty*TILE + TILE/2), ly1 = -(ty*TILE - TILE/2);
+  const sw = toLocal(bb[0], bb[1]), ne = toLocal(bb[2], bb[3]);
+  const lx0 = sw.x, lx1 = ne.x, ly0 = -sw.z, ly1 = -ne.z;
   const rect = [{x:lx0,y:ly0},{x:lx1,y:ly0},{x:lx1,y:ly1},{x:lx0,y:ly1}];
   const holes = [];
   for(const r of waterRings){
@@ -974,30 +1051,56 @@ function disposeTile(key){
   rebuildGrid();
 }
 
-async function loadTile(tx, ty){
-  const key = tkey(tx,ty);
+async function loadTile(gi, gj){
+  const key = tkey(gi,gj);
   if(tiles.has(key)) return;
   tiles.set(key, { group:new THREE.Group(), ways:new Set(), state:'loading' });
-  const [s,w,n,e] = tileBBox(tx,ty);
-  let json;
-  try { json = await overpass(query(s,w,n,e)); }
-  catch(err){ tiles.delete(key); throw err; }   // else the tile is never retried
+  const bb = tileBBox(gi, gj);
+  const ck = `${TILE}/${gi}/${gj}`;
+  let json = await cacheGet(ck);
+  lastFromCache = !!json;
+  if(json) cacheHits++;
+  else {
+    try { json = await overpass(query(bb[0], bb[1], bb[2], bb[3])); }
+    catch(err){ tiles.delete(key); throw err; }  // else the tile is never retried
+    netFetches++;
+    cachePut(ck, json);
+  }
   tiles.delete(key);
-  return buildTile(json, tx, ty);
+  return buildTile(json, gi, gj, bb);
 }
 
-function enqueue(tx, ty){
-  const key = tkey(tx,ty);
-  if(tiles.has(key) || queue.some(q=>q[0]===tx && q[1]===ty)) return;
-  queue.push([tx,ty]);
+function enqueue(gi, gj){
+  const key = tkey(gi,gj);
+  if(tiles.has(key) || queue.some(q => q[0]===gi && q[1]===gj)) return;
+  queue.push([gi,gj]);
 }
+/* One tile in flight at a time, a real pause between network fetches, and an
+   exponential retreat when Overpass pushes back. Cached tiles skip the wait. */
+const GAP = 1800;
+let backoff = 0, nextAt = 0;
+let stalled = '';
 async function pump(){
-  if(pending > 0 || !queue.length) return;
-  const [tx,ty] = queue.shift();
+  // The render loop calls this every frame, so the delay has to live in a
+  // timestamp — a bare setTimeout would just be raced by the next frame.
+  if(pending > 0 || !queue.length || performance.now() < nextAt) return;
+  const [gi,gj] = queue.shift();
   pending++;
-  try { await loadTile(tx,ty); } catch(err){ console.warn('tile failed', tx, ty, err); }
+  let wait = GAP;
+  try {
+    await loadTile(gi, gj);
+    backoff = 0; stalled = '';
+    if(lastFromCache) wait = 0;
+  } catch(err){
+    backoff = Math.min(60000, backoff ? backoff*2 : 4000);
+    wait = backoff;
+    stalled = `Overpass unreachable — retrying in ${Math.round(backoff/1000)}s`;
+    queue.push([gi,gj]);                       // put it back for another go
+    console.warn('tile failed, retrying in', wait/1000 + 's', err && err.message);
+  }
   pending--;
-  setTimeout(pump, 250);
+  nextAt = performance.now() + wait;
+  setTimeout(pump, wait);
 }
 
 /* ================================================================ player */
@@ -1176,14 +1279,14 @@ function frame(){
       player.speed = sp;
     } else player.speed = 0;
 
-    // stream in neighbouring tiles
-    const [tx,ty] = tileOf(player.x, player.z);
-    for(let dx=-1; dx<=1; dx++) for(let dy=-1; dy<=1; dy++) enqueue(tx+dx, ty+dy);
+    // stream in only what we can now see into
+    for(const [gi,gj] of neededTiles()) enqueue(gi, gj);
     pump();
     if(tiles.size > 26){
+      const [ci,cj] = tileAt(player.x, player.z);
       for(const k of [...tiles.keys()]){
         const [a,b] = k.split(',').map(Number);
-        if(Math.abs(a-tx) > 2 || Math.abs(b-ty) > 2) disposeTile(k);
+        if(Math.abs(a-ci) > 2 || Math.abs(b-cj) > 2) disposeTile(k);
       }
     }
   }
@@ -1207,7 +1310,9 @@ function frame(){
     const ll = toLatLon(player.x, player.z);
     el.coords.textContent = `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)}`;
     const q = queue.length + pending;
-    el.status.textContent = q ? `loading ${q} more block${q>1?'s':''}…` : `${tiles.size} blocks loaded`;
+    el.status.textContent = stalled ? stalled
+      : q ? `loading ${q} more block${q>1?'s':''}…`
+      : `${tiles.size} blocks loaded · ${cacheHits} cached, ${netFetches} fetched`;
     updateSun();
     syncHash();
   }
@@ -1232,6 +1337,7 @@ function resetWorld(){
   for(const k of [...tiles.keys()]) disposeTile(k);
   tiles.clear(); seen.clear(); queue.length = 0;
   colliders.length = 0; roads.length = 0; bridges.length = 0; rebuildGrid();
+  cacheHits = 0; netFetches = 0; backoff = 0; nextAt = 0; stalled = '';
   while(world.children.length){
     const c = world.children.pop();
     c.traverse(o=>{ if(o.geometry) o.geometry.dispose(); });
@@ -1250,13 +1356,15 @@ async function go(lat, lon, label){
   player.x = 0; player.z = 0; player.yaw = 0; player.pitch = 0;
 
   try {
-    const n = await loadTile(0, 0);
+    const [gi, gj] = tileAt(0, 0);
+    const n = await loadTile(gi, gj);
     if(!n) el.err.textContent = 'No buildings found there — the view may be empty. Try a denser spot.';
   } catch(err){
     hideLoader();
     el.err.textContent = 'Could not reach Overpass: ' + err.message + ' — try again in a moment.';
     return;
   }
+  nextAt = performance.now() + GAP;   // don't chase the landing tile immediately
   const [fx, fz] = freeSpot(0, 0);
   player.x = fx; player.z = fz;
   // look down whichever street segment we actually landed next to
@@ -1272,7 +1380,7 @@ async function go(lat, lon, label){
   el.start.classList.add('hidden');
   el.hud.classList.add('on');
   clock.getDelta();
-  for(let dx=-1; dx<=1; dx++) for(let dy=-1; dy<=1; dy++) if(dx||dy) enqueue(dx,dy);
+  for(const [gi,gj] of neededTiles()) enqueue(gi, gj);
   pump();
 }
 
@@ -1371,7 +1479,9 @@ el.hour.addEventListener('input', ()=>{ el.live.checked = false; updateSun(); })
 el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checked; scene.traverse(o=>{ if(o.material) o.material.needsUpdate = true; }); });
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
-                colliders, roads, bridges, MAT, TEX, go, solarPosition };
+                colliders, roads, bridges, MAT, TEX, go, solarPosition,
+                stats: () => ({ cached:cacheHits, fetched:netFetches,
+                                tiles:tiles.size, queued:queue.length + pending }) };
 if(!fromHash()) el.q.focus();
 addEventListener('hashchange', fromHash);
 </script>
