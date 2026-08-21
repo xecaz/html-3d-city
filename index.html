@@ -126,6 +126,7 @@
       </label>
       <label><input type="checkbox" id="sh" checked> shadows</label>
       <label><input type="checkbox" id="showarms" checked> arms</label>
+      <label><input type="checkbox" id="showpeople" checked> people</label>
       <label><input type="checkbox" id="livetime" checked> sun at local time now</label>
       <label>hour <input type="range" id="hour" min="0" max="23.75" step="0.25" value="15" style="width:130px">
         <span id="hourlbl" style="font-variant-numeric:tabular-nums;color:var(--text)">—</span></label>
@@ -156,7 +157,7 @@ const el = {
   start:$('#start'), q:$('#q'), sug:$('#sug'), err:$('#err'), chips:$('#chips'),
   loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
   street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
-  rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
+  rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), showPeople:$('#showpeople'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
   sun:$('#sunhud')
 };
 
@@ -742,6 +743,11 @@ function stitch(ids, ways, nodes){
   return rings.map(r=>ringOf(r, nodes)).filter(r=>r.length > 2);
 }
 
+// what a pedestrian may use, and where they walk down the middle of it
+const WALKABLE = new Set(['primary','secondary','tertiary','unclassified','residential',
+  'living_street','pedestrian','footway','path','cycleway','steps','service','track']);
+const FOOT = new Set(['pedestrian','footway','path','steps','track']);
+
 const ROAD = {
   motorway:[14,0x5b5c60], trunk:[13,0x5b5c60], primary:[11,0x60605f], secondary:[9.5,0x5c5d61],
   tertiary:[8,0x5a5b5f], unclassified:[6.5,0x565759], residential:[6.5,0x565759],
@@ -754,6 +760,7 @@ const ROAD = {
 const colliders = [];              // {ring, x0,x1,y0,y1, tile}
 const roads     = [];              // {name, pts, tile}
 const bridges   = [];              // {pts, hs, w, tile} — decks you can walk over
+let   pathsDirty = true;           // roads changed; the junction map needs rebuilding
 let grid = new Map();
 const CELL = 24;
 const gk = (cx,cy) => cx + ',' + cy;
@@ -992,7 +999,9 @@ function buildTile(json, gi, gj, bb){
         } else {
           addRibbon(road, src, width, 0.04 + (t.highway==='footway'?0.01:0), [c.r,c.g,c.b]);
         }
-        if(t.name) roads.push({ name:t.name, pts:src, tile:key });
+        roads.push({ name:t.name, pts:src, tile:key, w:width,
+                     foot: FOOT.has(t.highway), walk: WALKABLE.has(t.highway) });
+        pathsDirty = true;
       }
     }
     else if(closed && (t.natural === 'water' || /^(riverbank|dock|canal)$/.test(t.waterway||''))){
@@ -1050,7 +1059,8 @@ function disposeTile(key){
   for(const id of t.ways) seen.delete(id);
   tiles.delete(key);
   for(let i=colliders.length-1;i>=0;i--) if(colliders[i].tile === key) colliders.splice(i,1);
-  for(let i=roads.length-1;i>=0;i--)     if(roads[i].tile === key) roads.splice(i,1);
+  for(let i=roads.length-1;i>=0;i--) if(roads[i].tile === key){ roads[i].dead = true; roads.splice(i,1); }
+  pathsDirty = true;
   for(let i=bridges.length-1;i>=0;i--)   if(bridges[i].tile === key) bridges.splice(i,1);
   rebuildGrid();
 }
@@ -1351,10 +1361,245 @@ function nearestStreet(){
       t = Math.max(0, Math.min(1, t));
       const dx = player.x - (a.x+vx*t), dy = py - (a.y+vy*t);
       const d = dx*dx+dy*dy;
-      if(d < bd){ bd = d; best = r.name; }
+      if(d < bd && r.name){ bd = d; best = r.name; }
     }
   }
   return best;
+}
+
+
+/* ==================================================================== people
+   Pedestrians drawn as six InstancedMeshes — head, torso, two legs, two arms —
+   so the whole crowd costs six draw calls no matter how many are out. They walk
+   the road graph on a sidewalk offset, choose a new way at each junction, and
+   are spawned and retired in a ring around you, sometimes alone and sometimes
+   in twos and threes. */
+const PEOPLE_MAX = 80, SPAWN_MIN = 30, SPAWN_MAX = 130, DESPAWN = 170;
+let peopleOn = true, colorsDirty = true, spawnTimer = 0, gyCursor = 0;
+const npcs = [];
+const junctions = new Map();
+const jkey = (x,y) => Math.round(x*2) + ',' + Math.round(y*2);
+
+function rebuildJunctions(){
+  junctions.clear();
+  for(const r of roads){
+    if(!r.walk || !r.pts || r.pts.length < 2) continue;
+    for(const end of [0,1]){
+      const p = end ? r.pts[r.pts.length-1] : r.pts[0];
+      const k = jkey(p.x, p.y);
+      let a = junctions.get(k); if(!a) junctions.set(k, a = []);
+      a.push({ r, end });
+    }
+  }
+  pathsDirty = false;
+}
+
+const NPC_G = {
+  head : new THREE.SphereGeometry(0.115, 8, 6),
+  torso: new THREE.CapsuleGeometry(0.15, 0.32, 3, 8),
+  leg  : new THREE.CapsuleGeometry(0.062, 0.62, 3, 6).translate(0, -0.31, 0),
+  arm  : new THREE.CapsuleGeometry(0.048, 0.44, 3, 6).translate(0, -0.22, 0),
+};
+const PARTS = {};
+for(const [k, geo] of [['head',NPC_G.head], ['torso',NPC_G.torso],
+                       ['legL',NPC_G.leg], ['legR',NPC_G.leg],
+                       ['armL',NPC_G.arm], ['armR',NPC_G.arm]]){
+  const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial(), PEOPLE_MAX);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.frustumCulled = false;          // they are placed by hand, not by the graph
+  m.castShadow = true;
+  m.count = 0;
+  scene.add(m);
+  PARTS[k] = m;
+}
+
+const segLen = (a,b) => Math.hypot(b.x-a.x, b.y-a.y) || 0.001;
+
+/* Sampling uniformly from every loaded road mostly misses the spawn ring — the
+   tiles cover well over a square kilometre. Keep a shortlist of the segments
+   actually near you and draw from that instead. */
+let nearSegs = [], nearX = 1e9, nearZ = 1e9, nearAge = 0;
+function refreshNear(){
+  nearSegs = [];
+  for(const r of roads){
+    if(!r.walk || !r.pts || r.pts.length < 2) continue;
+    for(let i = 0; i < r.pts.length-1; i++){
+      const a = r.pts[i], b = r.pts[i+1];
+      const mx = (a.x+b.x)/2, my = (a.y+b.y)/2;
+      if(Math.hypot(mx - player.x, my + player.z) < SPAWN_MAX + 40) nearSegs.push({ r, i });
+    }
+  }
+  nearX = player.x; nearZ = player.z; nearAge = 0;
+}
+const sidewalk = r => r.foot ? (Math.random()-0.5)*1.1
+                             : (Math.random()<0.5?-1:1) * ((r.w||5)/2 + 0.7 + Math.random()*0.5);
+
+function pickSpawn(){
+  for(let tries = 0; tries < 24 && nearSegs.length; tries++){
+    const c = nearSegs[(Math.random()*nearSegs.length)|0];
+    if(c.r.dead || c.i > c.r.pts.length-2) continue;
+    const a = c.r.pts[c.i], b = c.r.pts[c.i+1], len = segLen(a,b);
+    if(len < 1.5) continue;
+    const u = Math.random()*len;
+    const x = a.x + (b.x-a.x)*u/len, y = a.y + (b.y-a.y)*u/len;
+    const d = Math.hypot(x - player.x, y + player.z);
+    if(d < SPAWN_MIN || d > SPAWN_MAX) continue;
+    return { r: c.r, i: c.i, u };
+  }
+  return null;
+}
+
+function spawnGroup(){
+  const s = pickSpawn();
+  if(!s) return;
+  // most people are alone; the rest are out in twos and threes
+  const size = Math.random() < 0.42 ? (Math.random() < 0.62 ? 2 : 3) : 1;
+  const dir  = Math.random() < 0.5 ? 1 : -1;
+  const lane = sidewalk(s.r);
+  const pace = 1.05 + Math.random()*0.4;
+  for(let k = 0; k < size && npcs.length < PEOPLE_MAX; k++){
+    npcs.push({
+      r: s.r, i: s.i, u: Math.max(0, s.u - k*1.0*dir), dir,
+      side: lane + (k - (size-1)/2) * 0.72,
+      speed: size > 1 ? pace : 0.95 + Math.random()*0.75,   // groups keep pace
+      phase: Math.random()*6.283, h: 0.93 + Math.random()*0.17, gy: 0,
+      cloth: new THREE.Color().setHSL(Math.random(), 0.20 + Math.random()*0.40,
+                                      0.24 + Math.random()*0.36),
+      skin:  new THREE.Color().setHSL(0.06 + Math.random()*0.03, 0.30,
+                                      0.34 + Math.random()*0.30),
+    });
+  }
+  colorsDirty = true;
+}
+
+/* At the end of a way, take another one from the same junction. */
+function hop(n, at){
+  const pool = (junctions.get(jkey(at.x, at.y)) || [])
+                 .filter(o => o.r !== n.r && !o.r.dead && o.r.pts.length > 1);
+  if(pool.length){
+    const c = pool[(Math.random()*pool.length)|0];
+    n.r = c.r;
+    if(c.end === 0){ n.i = 0; n.u = 0; n.dir = 1; }
+    else { n.i = c.r.pts.length - 2; n.dir = -1;
+           n.u = segLen(c.r.pts[n.i], c.r.pts[n.i+1]); }
+    n.side = sidewalk(n.r);
+    return true;
+  }
+  n.dir *= -1;                                    // dead end: turn on your heel
+  if(n.dir > 0){ n.i = 0; n.u = 0; }
+  else { n.i = n.r.pts.length - 2; n.u = segLen(n.r.pts[n.i], n.r.pts[n.i+1]); }
+  return true;
+}
+
+function stepNPC(n, dt){
+  let move = n.speed * dt, guard = 0;
+  while(move > 0 && guard++ < 8){
+    const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
+    if(!a || !b) return false;
+    const len = segLen(a,b);
+    if(n.dir > 0){
+      const rem = len - n.u;
+      if(move < rem){ n.u += move; break; }
+      move -= rem; n.i++;
+      if(n.i > pts.length - 2){ n.i = pts.length - 2; hop(n, pts[pts.length-1]); }
+      else n.u = 0;
+    } else {
+      if(move < n.u){ n.u -= move; break; }
+      move -= n.u; n.i--;
+      if(n.i < 0){ n.i = 0; hop(n, pts[0]); }
+      else n.u = segLen(pts[n.i], pts[n.i+1]);
+    }
+  }
+  return true;
+}
+
+const _d = new THREE.Object3D(); _d.rotation.order = 'YXZ';
+function place(mesh, idx, x, y, z, pitch, yaw, sc){
+  _d.position.set(x, y, z);
+  _d.rotation.set(pitch, yaw, 0);
+  _d.scale.setScalar(sc);
+  _d.updateMatrix();
+  mesh.setMatrixAt(idx, _d.matrix);
+}
+
+let peopleErr = null;
+function updatePeople(dt){
+  try { updatePeopleInner(dt); }
+  catch(e){ peopleErr = (e && e.stack ? e.stack : String(e)).slice(0, 300); }
+}
+function updatePeopleInner(dt){
+  if(!peopleOn){ for(const k in PARTS) PARTS[k].count = 0; return; }
+  if(pathsDirty) rebuildJunctions();
+
+  for(let i = npcs.length-1; i >= 0; i--){
+    const n = npcs[i];
+    const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
+    const gone = n.r.dead || !a || !b ||
+                 Math.hypot((a.x - player.x), (a.y + player.z)) > DESPAWN;
+    if(gone || !stepNPC(n, dt)){ npcs.splice(i,1); colorsDirty = true; }
+  }
+  nearAge += dt;
+  // Retry while the shortlist is empty: the first frame runs before any tile
+  // has loaded, and caching that empty result would stall spawning until the
+  // age timer next elapsed — which on a slow machine is many seconds.
+  if(!nearSegs.length || nearAge > 1.5 ||
+     Math.hypot(player.x-nearX, player.z-nearZ) > 30) refreshNear();
+
+  spawnTimer -= dt;
+  if(spawnTimer <= 0 && nearSegs.length){
+    // top up hard when well below strength, then trickle — otherwise the crowd
+    // size would depend on how fast the machine renders
+    let budget = npcs.length < PEOPLE_MAX*0.6 ? 12 : 2;
+    while(budget-- > 0 && npcs.length < PEOPLE_MAX) spawnGroup();
+    spawnTimer = 0.25;
+  }
+
+  // ground height is only needed for bridges, so amortise it across frames
+  for(let k = 0; k < 6 && npcs.length; k++){
+    gyCursor = (gyCursor + 1) % npcs.length;
+    const n = npcs[gyCursor];
+    const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
+    if(a && b){
+      const len = segLen(a,b), tx = (b.x-a.x)/len, ty = (b.y-a.y)/len;
+      n.gy = deckAt(a.x + tx*n.u + ty*n.side, -(a.y + ty*n.u - tx*n.side));
+    }
+  }
+
+  for(let k = 0; k < npcs.length; k++){
+    const n = npcs[k], pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
+    const len = segLen(a,b), tx = (b.x-a.x)/len, ty = (b.y-a.y)/len;
+    const px = a.x + tx*n.u + ty*n.side;
+    const py = a.y + ty*n.u - tx*n.side;
+    const wx = px, wz = -py;
+    const hx = tx*n.dir, hy = ty*n.dir;
+    const yaw = Math.atan2(-hx, hy);
+    n.phase += n.speed * dt * 3.4;
+    const h = n.h, stride = Math.sin(n.phase);
+    const bob = Math.abs(Math.cos(n.phase)) * 0.022 * h;
+    const gy = n.gy, cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const ox = lx => wx + lx*h*cy, oz = lx => wz - lx*h*sy;
+
+    place(PARTS.torso, k, wx, gy + 1.03*h + bob, wz, 0.05, yaw, h);
+    place(PARTS.head,  k, wx, gy + 1.50*h + bob, wz, 0,    yaw, h);
+    place(PARTS.legL,  k, ox(-0.085), gy + 0.74*h + bob, oz(-0.085),  stride*0.55, yaw, h);
+    place(PARTS.legR,  k, ox( 0.085), gy + 0.74*h + bob, oz( 0.085), -stride*0.55, yaw, h);
+    place(PARTS.armL,  k, ox(-0.195), gy + 1.30*h + bob, oz(-0.195), -stride*0.42, yaw, h);
+    place(PARTS.armR,  k, ox( 0.195), gy + 1.30*h + bob, oz( 0.195),  stride*0.42, yaw, h);
+
+    if(colorsDirty){
+      PARTS.torso.setColorAt(k, n.cloth);
+      PARTS.legL.setColorAt(k, n.cloth); PARTS.legR.setColorAt(k, n.cloth);
+      PARTS.head.setColorAt(k, n.skin);
+      PARTS.armL.setColorAt(k, n.skin);  PARTS.armR.setColorAt(k, n.skin);
+    }
+  }
+  for(const k in PARTS){
+    const m = PARTS[k];
+    m.count = npcs.length;
+    m.instanceMatrix.needsUpdate = true;
+    if(colorsDirty && m.instanceColor) m.instanceColor.needsUpdate = true;
+  }
+  colorsDirty = false;
 }
 
 /* ------------------------------------------------------------- main loop */
@@ -1406,6 +1651,7 @@ function frame(){
   camera.position.set(player.x, EYE + player.y + bob, player.z);
   camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
   animateArms(dt);
+  updatePeople(dt);
   sky.position.copy(camera.position);
   ground.position.set(Math.round(player.x/500)*500, -2.6, Math.round(player.z/500)*500);
   sun.target.position.set(player.x, 0, player.z);
@@ -1447,6 +1693,7 @@ function resetWorld(){
   for(const k of [...tiles.keys()]) disposeTile(k);
   tiles.clear(); seen.clear(); queue.length = 0;
   colliders.length = 0; roads.length = 0; bridges.length = 0; rebuildGrid();
+  npcs.length = 0; junctions.clear(); pathsDirty = true; colorsDirty = true;
   cacheHits = 0; netFetches = 0; backoff = 0; nextAt = 0; stalled = '';
   while(world.children.length){
     const c = world.children.pop();
@@ -1462,6 +1709,7 @@ async function go(lat, lon, label){
   mLon = 111320 * Math.cos(lat0 * Math.PI/180);
   TILE = parseInt(el.rad.value, 10);
   armsOn = el.showArms.checked;
+  peopleOn = el.showPeople.checked;
   fetchZone(lat, lon);          // async; updates the clock when it lands
   updateSun();
   player.x = 0; player.z = 0; player.yaw = 0; player.pitch = 0;
@@ -1588,11 +1836,19 @@ updateSun();
 el.live.addEventListener('change', updateSun);
 el.hour.addEventListener('input', ()=>{ el.live.checked = false; updateSun(); });
 el.showArms.addEventListener('change', ()=>{ armsOn = el.showArms.checked; });
+el.showPeople.addEventListener('change', ()=>{ peopleOn = el.showPeople.checked; });
 el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checked; scene.traverse(o=>{ if(o.material) o.material.needsUpdate = true; }); });
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 colliders, roads, bridges, MAT, TEX, go, solarPosition,
-                arms, armL, armR, ARM,
+                arms, armL, armR, ARM, npcs, PARTS, junctions,
+                peopleDebug: () => ({ npcs:npcs.length, nearSegs:nearSegs.length,
+                  roads:roads.length, walkable:roads.filter(r=>r.walk).length,
+                  junctions:junctions.size, pathsDirty, peopleOn,
+                  spawnTimer:+spawnTimer.toFixed(2), lastErr:peopleErr,
+                  sample:(()=>{ const s=pickSpawn();
+                    return s ? {d:+Math.hypot(s.r.pts[s.i].x-player.x,
+                                              s.r.pts[s.i].y+player.z).toFixed(1)} : null; })() }),
                 stats: () => ({ cached:cacheHits, fetched:netFetches,
                                 tiles:tiles.size, queued:queue.length + pending }) };
 if(!fromHash()) el.q.focus();

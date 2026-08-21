@@ -155,6 +155,22 @@ far into the gesture you are. A quarter turn gives palms inward with the thumbs
 riding on top, which is how hands sit when you run; a half turn presents the
 palm to the camera.
 
+**People.** Pedestrians walk the road graph, sometimes alone and sometimes in
+twos and threes keeping pace together. They are drawn as six `InstancedMesh`
+objects — head, torso, two legs, two arms — so the whole crowd is six draw calls
+however many are out, with per-instance colour for clothing and skin. Each one
+follows a way at a sidewalk offset, takes another way at each junction (OSM ways
+share endpoint nodes, so the junctions fall out of the data for free — 147 of
+them in one Jordaan tile), and turns on its heel at a dead end. They ride bridge
+decks like you do.
+
+They are spawned and retired in a ring around you, drawn from a shortlist of
+nearby segments that is refreshed as you move — sampling uniformly from every
+loaded road mostly misses, because the tiles cover well over a square kilometre.
+Population is topped up in a burst rather than one group per frame, so the crowd
+size does not depend on how fast your machine renders. Toggle them off on the
+start page.
+
 ## Textures, and the street-view question
 
 The facades are procedurally drawn to a canvas — plaster grain, storey bands,
@@ -200,6 +216,8 @@ against their terms.
 - **You can walk over water.** Canals are not solid, because making them solid
   would strand you whenever a bridge is missing from the data. You float across.
 - **Interiors do not exist.** These are hollow shells with no doors.
+- **Pedestrians do not avoid anything** — not you, not each other. They follow
+  their way and walk through whatever is in the way.
 - **Landmark heights are guessed** when OSM has none, so the odd church tower is
   the wrong size.
 - **Overpass is a shared free service** run on donated hardware. Tiles are cached
