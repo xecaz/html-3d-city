@@ -91,7 +91,7 @@
     <div><kbd>↑</kbd><kbd>↓</kbd> walk &nbsp; <kbd>←</kbd><kbd>→</kbd> turn</div>
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + mouse look</div>
     <div><kbd>Shift</kbd> run &nbsp; <kbd>Esc</kbd> free cursor</div>
-    <div><kbd>[</kbd><kbd>]</kbd> rewind / advance the sun</div>
+    <div><kbd>[</kbd><kbd>]</kbd> rewind / advance the sun &nbsp; <kbd>F</kbd> gesture</div>
   </div>
   <button id="back">← new location</button>
   <div id="street"></div>
@@ -125,6 +125,7 @@
         </select>
       </label>
       <label><input type="checkbox" id="sh" checked> shadows</label>
+      <label><input type="checkbox" id="showarms" checked> arms</label>
       <label><input type="checkbox" id="livetime" checked> sun at local time now</label>
       <label>hour <input type="range" id="hour" min="0" max="23.75" step="0.25" value="15" style="width:130px">
         <span id="hourlbl" style="font-variant-numeric:tabular-nums;color:var(--text)">—</span></label>
@@ -155,7 +156,7 @@ const el = {
   start:$('#start'), q:$('#q'), sug:$('#sug'), err:$('#err'), chips:$('#chips'),
   loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
   street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
-  rad:$('#rad'), sh:$('#sh'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
+  rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
   sun:$('#sunhud')
 };
 
@@ -429,6 +430,9 @@ const MAT = {
   quay:  new THREE.MeshLambertMaterial({ map:TEX.quay,   vertexColors:true }),
   water: new THREE.MeshPhongMaterial({ color:0x2f5a6e, shininess:90, specular:0x88bbcc, flatShading:false }),
   green: new THREE.MeshLambertMaterial({ color:0x5f7f45 }),
+  // tone sampled from running.arms.gif, lifted to an albedo since the gif
+  // pixels already carry their own shading
+  skin:  new THREE.MeshLambertMaterial({ color:0xc9a894, emissive:0x0d0908 }),
 };
 
 /* muted Dutch-brick / plaster palette, picked deterministically per building */
@@ -1116,6 +1120,111 @@ ground.position.y = -2.6;
 ground.receiveShadow = true;
 scene.add(ground);
 
+/* ------------------------------------------------------------- view arms
+   Two arms parented to the camera, swinging on the same phase as the head
+   bob so they keep step with whatever pace you are actually moving at. They
+   slide down out of frame when you stand still and swing harder when you run. */
+let armsOn = true;
+const ARM = { lift:0, run:0, flip:0 };
+/* A hand, not a blob: flattened palm, four separated fingers curled into the
+   loose fist you actually run with, and a thumb laid along the index side. */
+const CURL = -1.25, CURL_OUT = 0.06;      // curled fist vs one digit extended
+const FLIP_BASE = 1.55, FLIP_BEND = 1.00;   // hand 37 cm out, palm to camera
+function makeHand(side){
+  const hand = new THREE.Group();
+  const palm = new THREE.Mesh(new THREE.BoxGeometry(0.074, 0.090, 0.036), MAT.skin);
+  palm.position.y = -0.045;
+  hand.add(palm);
+
+  const knuckles = new THREE.Group();
+  knuckles.position.set(0, -0.088, 0.003);
+  const digits = [];
+  for(let f = 0; f < 4; f++){
+    const pivot = new THREE.Group();
+    pivot.position.x = -0.0263 + f*0.0175;
+    pivot.rotation.x = CURL;                   // curled into the fist
+    const seg = new THREE.Mesh(new THREE.BoxGeometry(0.0155, 0.052, 0.030), MAT.skin);
+    seg.position.y = -0.026;
+    pivot.add(seg);
+    knuckles.add(pivot);
+    digits.push(pivot);
+  }
+  hand.add(knuckles);
+  // thumb sits on the index side, so the middle digit is the second one in
+  const mid = side < 0 ? 2 : 1;
+  hand.userData.middle = digits[mid];
+  hand.userData.others = digits.filter((_, i) => i !== mid);
+
+  const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.013, 0.040, 3, 6), MAT.skin);
+  thumb.position.set(-side*0.032, -0.068, 0.020);
+  thumb.rotation.set(-0.5, 0, side*0.6);
+  hand.add(thumb);
+
+  return hand;
+}
+
+function makeArm(side){
+  const shoulder = new THREE.Group();
+  const UL = 0.27, FL = 0.25;
+  // No upper-arm mesh: the shoulder sits behind your eyes, so drawing it puts
+  // geometry across the near plane, where even a sliver smears over the whole
+  // screen. The pivot still drives the forearm; you simply never see your own
+  // upper arm in first person.
+  const elbow = new THREE.Group();
+  elbow.position.y = -UL;
+  const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.037, FL, 4, 10), MAT.skin);
+  fore.position.y = -FL/2;
+  fore.scale.set(1, 1, 0.82);                  // forearms are oval, not tubular
+  const hand = makeHand(side);
+  hand.position.y = -FL - 0.012;
+  elbow.add(fore, hand);
+  shoulder.add(elbow);
+  // solved so both hands stay framed through the whole swing while the elbow
+  // and upper arm stay below and behind the view
+  shoulder.position.set(side*0.185, -0.26, 0.04);
+  shoulder.rotation.z = side * 0.20;
+  return { shoulder, elbow, hand, side };
+}
+const armL = makeArm(-1), armR = makeArm(1);
+const arms = new THREE.Group();
+arms.add(armL.shoulder, armR.shoulder);
+camera.add(arms);
+scene.add(camera);      // a camera's children only update once it is in the graph
+
+function animateArms(dt){
+  if(!armsOn){ arms.visible = false; return; }
+  const moving = player.speed > 0.01 ? 1 : 0;
+  const rude   = keys.has('f') ? 1 : 0;
+  const runAmt = Math.max(0, Math.min(1, (player.speed - WALK) / (RUN - WALK)));
+  ARM.lift += (Math.max(moving, rude) - ARM.lift) * Math.min(1, dt*7);
+  ARM.run  += (runAmt - ARM.run)  * Math.min(1, dt*4);
+  ARM.flip += (rude - ARM.flip)   * Math.min(1, dt*11);
+
+  const f = ARM.flip;
+  const swing = Math.sin(player.bob);
+  const amp  = (0.14 + 0.10*ARM.run) * (1 - 0.55*f);  // keep pumping while gesturing
+  const base = 1.25*(1-f) + FLIP_BASE*f;
+  const bend = (1.20 + 0.25*ARM.run)*(1-f) + FLIP_BEND*f;
+  armL.shoulder.rotation.x = base + swing*amp;
+  armR.shoulder.rotation.x = base - swing*amp;
+  armL.elbow.rotation.x = bend + swing*0.35*(1 - 0.55*f);
+  armR.elbow.rotation.x = bend - swing*0.35*(1 - 0.55*f);
+  armL.shoulder.rotation.z = -0.20 + 0.20*f;         // draw them in to centre
+  armR.shoulder.rotation.z =  0.20 - 0.20*f;
+  for(const h of [armL.hand, armR.hand]){
+    const m = h.userData.middle;
+    m.rotation.x = CURL + f*(CURL_OUT - CURL);
+    m.scale.y = 1 + f*0.9;                      // stand it proud of the fist
+    for(const d of h.userData.others) d.rotation.x = CURL - f*0.30;
+  }
+  // Roll about the forearm: a quarter turn gives palms-inward with the thumb
+  // on top for running, a half turn presents the palm to the camera.
+  armL.hand.rotation.y = -armL.side * Math.PI * (1 + f) / 2;
+  armR.hand.rotation.y = -armR.side * Math.PI * (1 + f) / 2;
+  arms.position.y = -0.36 * (1 - ARM.lift);
+  arms.visible = ARM.lift > 0.02;
+}
+
 addEventListener('keydown', e=>{
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
   keys.add(e.key.length === 1 ? e.key.toLowerCase() : e.key);
@@ -1296,6 +1405,7 @@ function frame(){
   const bob = player.speed ? Math.sin(player.bob)*0.035 : 0;
   camera.position.set(player.x, EYE + player.y + bob, player.z);
   camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  animateArms(dt);
   sky.position.copy(camera.position);
   ground.position.set(Math.round(player.x/500)*500, -2.6, Math.round(player.z/500)*500);
   sun.target.position.set(player.x, 0, player.z);
@@ -1351,6 +1461,7 @@ async function go(lat, lon, label){
   lat0 = lat; lon0 = lon;
   mLon = 111320 * Math.cos(lat0 * Math.PI/180);
   TILE = parseInt(el.rad.value, 10);
+  armsOn = el.showArms.checked;
   fetchZone(lat, lon);          // async; updates the clock when it lands
   updateSun();
   player.x = 0; player.z = 0; player.yaw = 0; player.pitch = 0;
@@ -1476,10 +1587,12 @@ function fromHash(){
 updateSun();
 el.live.addEventListener('change', updateSun);
 el.hour.addEventListener('input', ()=>{ el.live.checked = false; updateSun(); });
+el.showArms.addEventListener('change', ()=>{ armsOn = el.showArms.checked; });
 el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checked; scene.traverse(o=>{ if(o.material) o.material.needsUpdate = true; }); });
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 colliders, roads, bridges, MAT, TEX, go, solarPosition,
+                arms, armL, armR, ARM,
                 stats: () => ({ cached:cacheHits, fetched:netFetches,
                                 tiles:tiles.size, queued:queue.length + pending }) };
 if(!fromHash()) el.q.focus();

@@ -44,6 +44,7 @@ The hash follows you as you walk, so any place you find is a shareable link.
 | mouse | look around — click once to capture the pointer, <kbd>Esc</kbd> to release |
 | <kbd>Shift</kbd> | run |
 | <kbd>[</kbd> <kbd>]</kbd> | rewind / advance the sun by 15 minutes |
+| <kbd>F</kbd> | hold to express an opinion |
 
 The search box takes a street address, a place name, or a raw `lat, lon` pair.
 
@@ -134,6 +135,25 @@ are disposed of, so a long wander does not grow without bound.
 **Collision.** Building footprints go into a 24 m spatial grid; movement is tested
 against the polygons in the neighbouring cells and slides along walls rather than
 stopping dead.
+
+**View arms.** Two arms parented to the camera, swinging on the same phase as
+the head bob so they keep step with your actual pace, sliding out of frame when
+you stand still. Toggle them off on the start page.
+
+Two things are worth knowing if you ever move them. The upper arm is deliberately
+not drawn: the shoulder sits behind your eyes, so a mesh there puts geometry
+across the near plane, and geometry straddling the near plane smears across the
+entire screen — the giveaway is a positive camera-space z on the arm's bounding
+box. The pivot still drives the forearm; you simply never see your own upper arm
+in first person. And the whole pose is solved rather than eyeballed: the shoulder
+angles are chosen so both hands stay framed through the full swing while the
+elbow stays below the viewport, which is worth re-checking if you change the
+field of view.
+
+Hand roll is a single expression, `-side * PI * (1 + f) / 2`, where `f` is how
+far into the gesture you are. A quarter turn gives palms inward with the thumbs
+riding on top, which is how hands sit when you run; a half turn presents the
+palm to the camera.
 
 ## Textures, and the street-view question
 
