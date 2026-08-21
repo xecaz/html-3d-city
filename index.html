@@ -1,0 +1,1379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>HTML City — walk any street on Earth</title>
+<style>
+  :root{
+    --bg:#0d1014; --panel:#161b22; --line:#2a323d; --text:#e6edf3;
+    --dim:#8b98a5; --accent:#f0a04b; --accent2:#5aa9e6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);
+    font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  canvas{display:block;width:100%;height:100%}
+  #c{position:fixed;inset:0}
+
+  /* ---------- start screen ---------- */
+  #start{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(120% 90% at 50% 0%,#1b2430 0%,#0d1014 60%);padding:24px}
+  #start.hidden{display:none}
+  .card{width:min(620px,100%)}
+  h1{margin:0 0 6px;font-size:30px;letter-spacing:-.6px;font-weight:650}
+  h1 span{color:var(--accent)}
+  .sub{margin:0 0 26px;color:var(--dim);font-size:14px}
+  .searchbox{position:relative}
+  #q{width:100%;padding:16px 18px;font-size:16px;color:var(--text);background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;outline:none}
+  #q:focus{border-color:var(--accent2)}
+  #sug{position:absolute;left:0;right:0;top:calc(100% + 8px);background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden;z-index:5;
+    max-height:300px;overflow-y:auto;box-shadow:0 18px 40px rgba(0,0,0,.55)}
+  #sug:empty{display:none}
+  .sug{padding:11px 16px;cursor:pointer;border-bottom:1px solid var(--line);font-size:13px}
+  .sug:last-child{border-bottom:none}
+  .sug:hover,.sug.sel{background:#1f2733}
+  .sug b{font-weight:600}
+  .sug i{display:block;color:var(--dim);font-style:normal;font-size:12px;margin-top:2px}
+  .chips{margin-top:20px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip{padding:7px 13px;border:1px solid var(--line);border-radius:999px;background:#141a21;
+    color:var(--dim);cursor:pointer;font-size:12.5px}
+  .chip:hover{border-color:var(--accent);color:var(--text)}
+  .opts{margin-top:22px;display:flex;gap:18px;align-items:center;color:var(--dim);font-size:12.5px;flex-wrap:wrap}
+  .opts label{display:flex;gap:7px;align-items:center;cursor:pointer}
+  select{background:#141a21;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:5px 8px}
+  .hint{margin-top:26px;color:#63707d;font-size:12px;line-height:1.7}
+  kbd{background:#1f2733;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;
+    padding:1px 6px;font:inherit;font-size:11px;color:var(--text)}
+  .err{color:#ff7b72;font-size:13px;margin-top:12px;min-height:18px}
+
+  /* ---------- loader ---------- */
+  #loader{position:fixed;inset:0;z-index:50;display:none;flex-direction:column;
+    align-items:center;justify-content:center;background:#0d1014;gap:16px}
+  #loader.on{display:flex}
+  .spin{width:34px;height:34px;border:3px solid #2a323d;border-top-color:var(--accent);
+    border-radius:50%;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  #ltext{color:var(--dim);font-size:13px}
+
+  /* ---------- hud ---------- */
+  #hud{position:fixed;inset:0;z-index:20;pointer-events:none;display:none}
+  #hud.on{display:block}
+  #street{position:absolute;left:20px;bottom:20px;font-size:19px;font-weight:600;
+    text-shadow:0 2px 12px rgba(0,0,0,.9);letter-spacing:-.2px}
+  #coords{position:absolute;left:20px;bottom:2px;font-size:11px;color:#b9c4cf;
+    text-shadow:0 1px 8px #000;font-variant-numeric:tabular-nums}
+  #status{position:absolute;left:20px;top:18px;font-size:12px;color:#b9c4cf;
+    text-shadow:0 1px 8px #000}
+  #sunhud{position:absolute;left:20px;top:38px;font-size:12px;color:#b9c4cf;
+    text-shadow:0 1px 8px #000;font-variant-numeric:tabular-nums}
+  #map{position:absolute;right:18px;bottom:18px;width:190px;height:190px;border-radius:10px;
+    border:1px solid rgba(255,255,255,.15);background:rgba(10,13,17,.72);backdrop-filter:blur(3px)}
+  #keys{position:absolute;right:18px;top:18px;text-align:right;font-size:11.5px;color:#b9c4cf;
+    text-shadow:0 1px 8px #000;line-height:1.8}
+  #back{position:absolute;left:50%;top:18px;transform:translateX(-50%);pointer-events:auto;
+    padding:7px 15px;border-radius:999px;border:1px solid rgba(255,255,255,.18);
+    background:rgba(13,16,20,.8);color:var(--text);cursor:pointer;font-size:12.5px}
+  #back:hover{border-color:var(--accent)}
+  #attrib{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);font-size:10.5px;
+    color:#7d8894;text-shadow:0 1px 6px #000}
+  #attrib a{color:#9aa7b3}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div id="status"></div>
+  <div id="sunhud"></div>
+  <div id="keys">
+    <div><kbd>↑</kbd><kbd>↓</kbd> walk &nbsp; <kbd>←</kbd><kbd>→</kbd> turn</div>
+    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + mouse look</div>
+    <div><kbd>Shift</kbd> run &nbsp; <kbd>Esc</kbd> free cursor</div>
+    <div><kbd>[</kbd><kbd>]</kbd> rewind / advance the sun</div>
+  </div>
+  <button id="back">← new location</button>
+  <div id="street"></div>
+  <div id="coords"></div>
+  <canvas id="map" width="380" height="380"></canvas>
+  <div id="attrib">geometry © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors · search by Nominatim</div>
+</div>
+
+<div id="loader"><div class="spin"></div><div id="ltext">loading…</div></div>
+
+<div id="start">
+  <div class="card">
+    <h1>HTML <span>City</span></h1>
+    <p class="sub">Type a street address, a place, or GPS coordinates — then walk it in 3D.
+       Buildings, canals, parks and roads are built live from OpenStreetMap.</p>
+
+    <div class="searchbox">
+      <input id="q" placeholder="e.g. Prinsengracht 263, Amsterdam   —   or   52.3752, 4.8840" autocomplete="off" spellcheck="false">
+      <div id="sug"></div>
+    </div>
+    <div class="err" id="err"></div>
+
+    <div class="chips" id="chips"></div>
+
+    <div class="opts">
+      <label>detail radius
+        <select id="rad">
+          <option value="450">450 m — fast</option>
+          <option value="600" selected>600 m — balanced</option>
+          <option value="850">850 m — dense</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="sh" checked> shadows</label>
+      <label><input type="checkbox" id="livetime" checked> sun at local time now</label>
+      <label>hour <input type="range" id="hour" min="0" max="23.75" step="0.25" value="15" style="width:130px">
+        <span id="hourlbl" style="font-variant-numeric:tabular-nums;color:var(--text)">—</span></label>
+    </div>
+
+    <div class="hint">
+      Walk with the <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> arrows. Click the view to capture the
+      mouse for free look. New streets stream in from Overpass as you wander, so you can keep going.
+      The sun is placed by real astronomy for that latitude, longitude and moment —
+      scrub it with <kbd>[</kbd> and <kbd>]</kbd> while walking to watch the shadows swing round.
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.169.0/build/three.module.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* =====================================================================
+   HTML City — OpenStreetMap → WebGL street walker
+   No build step, no API keys. Data: Overpass API + Nominatim geocoder.
+   ===================================================================== */
+
+const $ = s => document.querySelector(s);
+const el = {
+  start:$('#start'), q:$('#q'), sug:$('#sug'), err:$('#err'), chips:$('#chips'),
+  loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
+  street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
+  rad:$('#rad'), sh:$('#sh'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
+  sun:$('#sunhud')
+};
+
+/* ---------------------------------------------------------------- config */
+const EYE = 1.68;                 // camera height, metres
+const WALK = 1.9, RUN = 6.0;      // m/s
+const TURN = 1.9;                 // rad/s for arrow-key turning
+const BODY = 0.42;                // collision radius
+const M_LAT = 110574;             // metres per degree latitude
+
+const PRESETS = [
+  ['Prinsengracht, Amsterdam', 52.3752, 4.8840],
+  ['Dam Square, Amsterdam', 52.3731, 4.8926],
+  ['De Jordaan, Amsterdam', 52.3745, 4.8809],
+  ['Grachtengordel, Amsterdam', 52.3667, 4.8871],
+  ['Shibuya, Tokyo', 35.6595, 139.7005],
+  ['Venice, Rialto', 45.4380, 12.3358],
+  ['Le Marais, Paris', 48.8590, 2.3580],
+  ['Manhattan, Midtown', 40.7549, -73.9840],
+];
+
+/* ------------------------------------------------------------ projection */
+let lat0 = 0, lon0 = 0, mLon = 1;
+const toLocal  = (lat, lon) => ({ x:(lon-lon0)*mLon, z:-(lat-lat0)*M_LAT });
+const toLatLon = (x, z)     => ({ lat: lat0 - z/M_LAT, lon: lon0 + x/mLon });
+
+/* --------------------------------------------------------------- three.js */
+const renderer = new THREE.WebGLRenderer({ canvas:$('#c'), antialias:true, powerPreference:'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.shadowMap.enabled = true;      // set before any material compiles
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(72, 1, 0.1, 6000);
+const world  = new THREE.Group();        // everything that gets rebuilt per location
+scene.add(world);
+
+const hemi = new THREE.HemisphereLight(0xbcd4ee, 0x6f6357, 1.15);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffe6c2, 2.2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0008;
+sun.shadow.normalBias = 0.05;
+const sc = sun.shadow.camera;
+sc.near = 1; sc.far = 500; sc.left = -160; sc.right = 160; sc.top = 160; sc.bottom = -160;
+scene.add(sun, sun.target);
+
+/* sky dome — cheap vertical gradient */
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(3000, 24, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite:false,
+    uniforms:{ top:{value:new THREE.Color(0x3f77b8)}, bot:{value:new THREE.Color(0xd9d0c0)} },
+    vertexShader:`varying float h; void main(){ h = normalize(position).y;
+      gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader:`varying float h; uniform vec3 top; uniform vec3 bot;
+      void main(){ gl_FragColor = vec4(mix(bot, top, clamp(h*1.5+0.15,0.0,1.0)), 1.0); }`
+  })
+);
+sky.frustumCulled = false;
+scene.add(sky);
+
+/* ------------------------------------------------------------ the real sun
+   Low-precision solar position (NOAA / Astronomical Almanac form): good to a
+   fraction of a degree, which is far better than the eye can judge from a
+   shadow. Takes a UTC instant plus the spot on Earth you are standing on and
+   returns where the sun actually is in that sky. */
+function solarPosition(date, lat, lon){
+  const R = Math.PI/180;
+  const d = date.valueOf()/86400000 - 10957.5;          // days since J2000.0
+  const g = (357.529 + 0.98560028*d) * R;               // mean anomaly
+  const q =  280.459 + 0.98564736*d;                    // mean longitude
+  const L = (q + 1.915*Math.sin(g) + 0.020*Math.sin(2*g)) * R;   // ecliptic longitude
+  const e = (23.439 - 0.00000036*d) * R;                // obliquity
+  const ra  = Math.atan2(Math.cos(e)*Math.sin(L), Math.cos(L));
+  const dec = Math.asin(Math.sin(e)*Math.sin(L));
+  let gmst = (18.697374558 + 24.06570982441908*d) % 24;
+  if(gmst < 0) gmst += 24;
+  const H = (gmst + lon/15)*15*R - ra;                  // local hour angle
+  const phi = lat*R;
+  return {
+    alt: Math.asin(Math.sin(phi)*Math.sin(dec) + Math.cos(phi)*Math.cos(dec)*Math.cos(H)),
+    az:  Math.atan2(-Math.sin(H), Math.tan(dec)*Math.cos(phi) - Math.sin(phi)*Math.cos(H)),
+  };
+}
+
+/* Sky/light keyframes indexed by solar altitude in degrees. */
+const SKY = [
+  { a:-18, top:0x05070f, bot:0x0a0f1e, col:0x223055, int:0.00, hemi:0.34, hs:0x22354e, hg:0x14161c, fog:0x080d18 },
+  { a: -6, top:0x121d38, bot:0x2e3a56, col:0x46567a, int:0.06, hemi:0.60, hs:0x3a5070, hg:0x24252c, fog:0x1a2238 },
+  { a:  0, top:0x2b4674, bot:0xd4855a, col:0xff8347, int:0.90, hemi:1.00, hs:0x8ea6c6, hg:0x554b40, fog:0x99826f },
+  { a:  8, top:0x3a6fa8, bot:0xf2c78e, col:0xffc47c, int:2.10, hemi:1.45, hs:0xa8c2e0, hg:0x6f6357, fog:0xdcc3a4 },
+  { a: 25, top:0x3f7cbe, bot:0xe6e3d7, col:0xfff0d4, int:2.45, hemi:1.85, hs:0xbcd4ee, hg:0x6f6357, fog:0xdadfe0 },
+  { a: 60, top:0x2f6fc4, bot:0xdfe9f2, col:0xfffaf0, int:2.60, hemi:2.05, hs:0xc8dcf4, hg:0x74695c, fog:0xdfe4e6 },
+];
+const _cA = new THREE.Color(), _cB = new THREE.Color();
+const mixHex = (o, x, y, t) => { _cA.setHex(x); _cB.setHex(y); o.lerpColors(_cA, _cB, t); };
+
+const sunDir = new THREE.Vector3(0, 1, 0);
+let sunAlt = 0, sunAz = 0, nightMix = 0;
+
+function applySun(date){
+  const { alt, az } = solarPosition(date, lat0, lon0);
+  sunAlt = alt; sunAz = az;
+  const ca = Math.cos(alt);
+  sunDir.set(ca*Math.sin(az), Math.sin(alt), -ca*Math.cos(az));
+
+  const deg = alt*180/Math.PI;
+  let i = 0; while(i < SKY.length-2 && deg > SKY[i+1].a) i++;
+  const A = SKY[i], B = SKY[i+1];
+  const t = Math.max(0, Math.min(1, (deg - A.a)/(B.a - A.a)));
+
+  mixHex(sun.color, A.col, B.col, t);
+  sun.intensity  = A.int  + (B.int  - A.int )*t;
+  hemi.intensity = A.hemi + (B.hemi - A.hemi)*t;
+  mixHex(hemi.color, A.hs, B.hs, t);
+  mixHex(hemi.groundColor, A.hg, B.hg, t);
+  mixHex(sky.material.uniforms.top.value, A.top, B.top, t);
+  mixHex(sky.material.uniforms.bot.value, A.bot, B.bot, t);
+  if(!scene.fog) scene.fog = new THREE.Fog(0xffffff, 90, 780);
+  mixHex(scene.fog.color, A.fog, B.fog, t);
+
+  // windows come alight as the sun goes down
+  nightMix = Math.max(0, Math.min(1, (6 - deg)/13));
+  MAT.wall.emissiveIntensity = nightMix * 1.25;
+}
+
+/* ---- civil time where you are standing ---------------------------------
+   The sun only ever needs a UTC instant, so its position is right regardless.
+   The *clock* needs the city's real time zone, which we look up once per
+   location; Intl then handles DST and half-hour zones exactly. Without the
+   lookup we fall back to longitude, which is solar-sane but ignores politics. */
+let tzName = null;
+
+function zoneFields(date){
+  if(tzName) try {
+    const f = new Intl.DateTimeFormat('en-US', { timeZone:tzName, hourCycle:'h23',
+      year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const o = {}; for(const part of f.formatToParts(date)) o[part.type] = part.value;
+    return { y:+o.year, m:+o.month, d:+o.day, h:+o.hour, mi:+o.minute, s:+o.second };
+  } catch(e){ tzName = null; }
+  const t = new Date(date.valueOf() + Math.round(lon0/15)*3600000);
+  return { y:t.getUTCFullYear(), m:t.getUTCMonth()+1, d:t.getUTCDate(),
+           h:t.getUTCHours(), mi:t.getUTCMinutes(), s:t.getUTCSeconds() };
+}
+function zoneOffset(date){                       // hours east of UTC, fractional
+  const p = zoneFields(date);
+  return (Date.UTC(p.y, p.m-1, p.d, p.h, p.mi, p.s)
+          - Math.floor(date.valueOf()/1000)*1000) / 3600000;
+}
+async function fetchZone(lat, lon){
+  tzName = null;
+  try {
+    const r = await fetch(`https://timeapi.io/api/TimeZone/coordinate?latitude=${lat}&longitude=${lon}`);
+    const j = await r.json();
+    if(j && j.timeZone && Intl.DateTimeFormat('en-US',{timeZone:j.timeZone})) tzName = j.timeZone;
+  } catch(e){ /* longitude fallback is already in place */ }
+  updateSun();
+}
+
+function sceneDate(){
+  const now = new Date();
+  if(el.live.checked) return now;
+  const h = parseFloat(el.hour.value);
+  const p = zoneFields(now);                     // today's date where the city is
+  const base = Date.UTC(p.y, p.m-1, p.d) + h*3600000;
+  const first = new Date(base - zoneOffset(now)*3600000);
+  return new Date(base - zoneOffset(first)*3600000);   // settle across a DST edge
+}
+function updateSun(){
+  const d = sceneDate();
+  applySun(d);
+  const p = zoneFields(d);
+  if(el.live.checked) el.hour.value = (Math.round((p.h + p.mi/60)*4)/4).toFixed(2);
+  const clock = `${String(p.h).padStart(2,'0')}:${String(p.mi).padStart(2,'0')}`;
+  el.hourlbl.textContent = clock;
+  const deg = sunAlt*180/Math.PI;
+  const compass = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const c = compass[Math.round(((sunAz*180/Math.PI)%360+360)%360/22.5)%16];
+  el.sun.textContent = `${clock} ${tzName || 'solar time'} · sun `
+    + `${deg>0?'+':''}${deg.toFixed(0)}° ${deg>-0.5?c:'(below horizon)'}`;
+}
+
+/* ------------------------------------------------------------- textures */
+function facadeTexture(){
+  // 2x2 grid of storey-tiles so the tiling doesn't read as an obvious repeat.
+  const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  const ce = document.createElement('canvas'); ce.width = ce.height = S;
+  const ge = ce.getContext('2d');
+  ge.fillStyle = '#000000'; ge.fillRect(0,0,S,S);
+  g.fillStyle = '#ffffff'; g.fillRect(0,0,S,S);
+  // faint plaster grain
+  const im = g.getImageData(0,0,S,S), d = im.data;
+  for(let i=0;i<d.length;i+=4){ const n = (Math.random()*22)|0; d[i]-=n; d[i+1]-=n; d[i+2]-=n; }
+  g.putImageData(im,0,0);
+  const H = S/2, W = S/2;                       // one storey tile
+  for(let ty=0; ty<2; ty++) for(let tx=0; tx<2; tx++){
+    const ox = tx*W, oy = ty*H;
+    // storey band shadow at the floor line
+    g.fillStyle = 'rgba(0,0,0,.10)'; g.fillRect(ox, oy+H-6, W, 6);
+    g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(ox, oy+H-9, W, 3);
+    // two windows per tile
+    for(let w=0; w<2; w++){
+      const x = ox + W*(0.15 + w*0.45), y = oy + H*0.16;
+      const ww = W*0.24, wh = H*0.60;
+      g.fillStyle = 'rgba(30,25,20,.30)'; g.fillRect(x-3, y-3, ww+6, wh+6);   // reveal
+      // daylight glass in the colour map; the warm glow lives in the emissive
+      // map instead, so lamps switch on only once the real sun has set
+      const grd = g.createLinearGradient(x, y, x, y+wh);
+      grd.addColorStop(0,'#2c3946'); grd.addColorStop(0.55,'#4a5c6c'); grd.addColorStop(1,'#25303a');
+      g.fillStyle = grd; g.fillRect(x, y, ww, wh);
+      if(Math.random() < 0.34){
+        const lg = ge.createLinearGradient(x, y, x, y+wh);
+        lg.addColorStop(0,'#ffdda2'); lg.addColorStop(1,'#e0932f');
+        ge.fillStyle = lg; ge.fillRect(x, y, ww, wh);
+      }
+      g.strokeStyle = 'rgba(250,250,248,.9)'; g.lineWidth = 2.5;
+      g.strokeRect(x, y, ww, wh);
+      g.beginPath(); g.moveTo(x, y+wh/2); g.lineTo(x+ww, y+wh/2);            // glazing bars
+      g.moveTo(x+ww/2, y); g.lineTo(x+ww/2, y+wh); g.lineWidth = 1.6; g.stroke();
+    }
+  }
+  const mk = cv => {
+    const t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return t;
+  };
+  return { map: mk(c), lit: mk(ce) };
+}
+function noiseTexture(base, amt){
+  const S = 128, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = base; g.fillRect(0,0,S,S);
+  const im = g.getImageData(0,0,S,S), d = im.data;
+  for(let i=0;i<d.length;i+=4){ const n = (Math.random()-0.5)*amt; d[i]+=n; d[i+1]+=n; d[i+2]+=n; }
+  g.putImageData(im,0,0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+const FACADE = facadeTexture();
+const TEX = {
+  facade: FACADE.map,
+  facadeLit: FACADE.lit,
+  roof:   noiseTexture('#f2f2f0', 40),
+  road:   noiseTexture('#eeeeec', 30),
+  quay:   noiseTexture('#f6f3ee', 30),
+  paving: noiseTexture('#f4f2ee', 16),
+};
+TEX.roof.repeat.set(0.25, 0.25);
+TEX.road.repeat.set(0.2, 0.2);
+
+
+const MAT = {
+  wall:  new THREE.MeshLambertMaterial({ map:TEX.facade, vertexColors:true,
+           emissiveMap:TEX.facadeLit, emissive:0xffffff, emissiveIntensity:0 }),
+  roof:  new THREE.MeshLambertMaterial({ map:TEX.roof,   vertexColors:true }),
+  road:  new THREE.MeshLambertMaterial({ map:TEX.road,   vertexColors:true }),
+  paving:new THREE.MeshLambertMaterial({ map:TEX.paving, color:0x9a938a }),
+  void_: new THREE.MeshLambertMaterial({ color:0x6b665f }),
+  quay:  new THREE.MeshLambertMaterial({ map:TEX.quay,   vertexColors:true }),
+  water: new THREE.MeshPhongMaterial({ color:0x2f5a6e, shininess:90, specular:0x88bbcc, flatShading:false }),
+  green: new THREE.MeshLambertMaterial({ color:0x5f7f45 }),
+};
+
+/* muted Dutch-brick / plaster palette, picked deterministically per building */
+const PALETTE = [0xb0796a,0x9d6a5c,0xc99a7e,0x8f7f74,0xd9cbb6,0xa8907c,0x7d6b62,0xc4b39a,0x93695e,0xbfa88c];
+function hash(n){ n = (n ^ 61) ^ (n >>> 16); n = n + (n << 3); n = n ^ (n >>> 4); n = Math.imul(n, 0x27d4eb2d); return ((n ^ (n >>> 15)) >>> 0) / 4294967296; }
+
+/* ------------------------------------------------- geometry accumulator */
+class Buf {
+  constructor(){ this.p = []; this.n = []; this.u = []; this.c = []; }
+  tri(a,b,cc, na,nb,nc, ua,ub,uc, col){
+    this.p.push(a[0],a[1],a[2], b[0],b[1],b[2], cc[0],cc[1],cc[2]);
+    this.n.push(na[0],na[1],na[2], nb[0],nb[1],nb[2], nc[0],nc[1],nc[2]);
+    this.u.push(ua[0],ua[1], ub[0],ub[1], uc[0],uc[1]);
+    for(let i=0;i<3;i++) this.c.push(col[0],col[1],col[2]);
+  }
+  get empty(){ return this.p.length === 0; }
+  geometry(){
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
+    g.setAttribute('normal',   new THREE.Float32BufferAttribute(this.n, 3));
+    g.setAttribute('uv',       new THREE.Float32BufferAttribute(this.u, 2));
+    g.setAttribute('color',    new THREE.Float32BufferAttribute(this.c, 3));
+    g.computeBoundingSphere();
+    return g;
+  }
+}
+
+/* signed area in (x, north) space — positive = CCW */
+const area2 = r => { let a = 0; for(let i=0,j=r.length-1;i<r.length;j=i++) a += (r[j].x*r[i].y - r[i].x*r[j].y); return a/2; };
+
+/* Walls + roof cap for one building. rings[0] = outer, rest = courtyards.
+   Points are {x, y} with y = northing; three.js gets (x, height, -y). */
+function addBuilding(walls, roofs, rings, minH, maxH, col, roofCol){
+  if(!rings.length || rings[0].length < 3) return;
+  const outer = rings[0].slice();
+  if(area2(outer) < 0) outer.reverse();
+  const holes = [];
+  for(let i=1;i<rings.length;i++){
+    if(rings[i].length < 3) continue;
+    const h = rings[i].slice();
+    if(area2(h) > 0) h.reverse();
+    holes.push(h);
+  }
+  const TW = 6.0, TH = 6.6;   // metres covered by one texture repeat (2 storeys x 2 bays)
+
+  for(const ring of [outer, ...holes]){
+    let run = 0;
+    for(let i=0;i<ring.length;i++){
+      const p0 = ring[i], p1 = ring[(i+1)%ring.length];
+      const dx = p1.x-p0.x, dy = p1.y-p0.y;
+      const len = Math.hypot(dx,dy);
+      if(len < 0.02) continue;
+      const nx = dy/len, nz = dx/len;                       // outward normal
+      const N = [nx, 0, nz];
+      const u0 = run/TW, u1 = (run+len)/TW;
+      const v0 = minH/TH, v1 = maxH/TH;
+      run += len;
+      const A=[p0.x,minH,-p0.y], B=[p1.x,minH,-p1.y], C=[p1.x,maxH,-p1.y], D=[p0.x,maxH,-p0.y];
+      walls.tri(A,B,C, N,N,N, [u0,v0],[u1,v0],[u1,v1], col);
+      walls.tri(A,C,D, N,N,N, [u0,v0],[u1,v1],[u0,v1], col);
+    }
+  }
+  // Roof cap. triangulateShape() calls .equals() on the points, so it needs real
+  // Vector2s, and it pops duplicate end points in place — so the flat index list
+  // that its face indices refer to must be built *after* it runs, not before.
+  const cV = outer.map(p => new THREE.Vector2(p.x, p.y));
+  const hV = holes.map(h => h.map(p => new THREE.Vector2(p.x, p.y)));
+  let faces;
+  try { faces = THREE.ShapeUtils.triangulateShape(cV, hV); }
+  catch(e){ return; }
+  const flat = cV.concat(...hV);
+  const UP = [0,1,0];
+  for(const f of faces){
+    const a = flat[f[0]], b = flat[f[1]], c = flat[f[2]];
+    if(!a||!b||!c) continue;
+    roofs.tri([a.x,maxH,-a.y],[b.x,maxH,-b.y],[c.x,maxH,-c.y], UP,UP,UP,
+              [a.x/8,a.y/8],[b.x/8,b.y/8],[c.x/8,c.y/8], roofCol);
+  }
+}
+
+/* Flat polygon (water, parks, squares) at height y */
+function addFlat(buf, rings, y, col, uvScale){
+  if(!rings.length || rings[0].length < 3) return;
+  const outer = rings[0].slice();
+  if(area2(outer) < 0) outer.reverse();
+  const holes = [];
+  for(let i=1;i<rings.length;i++){
+    if(rings[i].length < 3) continue;
+    const h = rings[i].slice(); if(area2(h) > 0) h.reverse(); holes.push(h);
+  }
+  const cV = outer.map(p => new THREE.Vector2(p.x, p.y));
+  const hV = holes.map(h => h.map(p => new THREE.Vector2(p.x, p.y)));
+  let faces; try { faces = THREE.ShapeUtils.triangulateShape(cV, hV); } catch(e){ return; }
+  const flat = cV.concat(...hV);
+  const UP = [0,1,0], s = uvScale || 0.1;
+  for(const f of faces){
+    const a = flat[f[0]], b = flat[f[1]], c = flat[f[2]];
+    if(!a||!b||!c) continue;
+    buf.tri([a.x,y,-a.y],[b.x,y,-b.y],[c.x,y,-c.y], UP,UP,UP,
+            [a.x*s,a.y*s],[b.x*s,b.y*s],[c.x*s,c.y*s], col);
+  }
+}
+
+/* Sutherland-Hodgman clip of a ring to an axis-aligned rect. Canal polygons
+   run far past one tile, and a hole must sit inside its contour, so each tile
+   only punches the part of the canal that falls within its own square. */
+function clipToRect(ring, x0, y0, x1, y1){
+  const pass = (pts, inside, cut) => {
+    const out = [];
+    for(let i=0;i<pts.length;i++){
+      const a = pts[(i + pts.length - 1) % pts.length], b = pts[i];
+      const ia = inside(a), ib = inside(b);
+      if(ib){ if(!ia) out.push(cut(a,b)); out.push(b); }
+      else if(ia) out.push(cut(a,b));
+    }
+    return out;
+  };
+  let r = ring;
+  r = pass(r, p=>p.x>=x0, (a,b)=>({x:x0, y:a.y+(b.y-a.y)*((x0-a.x)/(b.x-a.x))})); if(r.length<3) return [];
+  r = pass(r, p=>p.x<=x1, (a,b)=>({x:x1, y:a.y+(b.y-a.y)*((x1-a.x)/(b.x-a.x))})); if(r.length<3) return [];
+  r = pass(r, p=>p.y>=y0, (a,b)=>({y:y0, x:a.x+(b.x-a.x)*((y0-a.y)/(b.y-a.y))})); if(r.length<3) return [];
+  r = pass(r, p=>p.y<=y1, (a,b)=>({y:y1, x:a.x+(b.x-a.x)*((y1-a.y)/(b.y-a.y))})); if(r.length<3) return [];
+  return r;
+}
+
+/* Vertical skirt around a polygon, used for canal quay walls. Each ring is
+   reversed so its faces look inward — you stand outside and see the wall
+   dropping to the water. */
+function addSkirt(buf, rings, top, bottom, col){
+  const TS = 2.2;
+  for(const r0 of rings){
+    if(!r0 || r0.length < 3) continue;
+    const ring = r0.slice();
+    if(area2(ring) > 0) ring.reverse();
+    let run = 0;
+    for(let i=0;i<ring.length;i++){
+      const p0 = ring[i], p1 = ring[(i+1)%ring.length];
+      const dx = p1.x-p0.x, dy = p1.y-p0.y, len = Math.hypot(dx,dy);
+      if(len < 0.02) continue;
+      const N = [dy/len, 0, dx/len];
+      const u0 = run/TS, u1 = (run+len)/TS; run += len;
+      const v0 = bottom/TS, v1 = top/TS;
+      const A=[p0.x,bottom,-p0.y], B=[p1.x,bottom,-p1.y],
+            C=[p1.x,top,-p1.y],    D=[p0.x,top,-p0.y];
+      buf.tri(A,B,C, N,N,N, [u0,v0],[u1,v0],[u1,v1], col);
+      buf.tri(A,C,D, N,N,N, [u0,v0],[u1,v1],[u0,v1], col);
+    }
+  }
+}
+
+/* A bridge deck: same ribbon, but arched so it lifts clear of the water and
+   meets the street flush at both ends. Returns the per-point deck heights so
+   the walker can ride over it. */
+function densify(pts, step){
+  const out = [pts[0]];
+  for(let i=1;i<pts.length;i++){
+    const a = pts[i-1], b = pts[i];
+    const L = Math.hypot(b.x-a.x, b.y-a.y);
+    const k = Math.max(1, Math.min(64, Math.ceil(L/step)));
+    for(let j=1;j<=k;j++) out.push({ x:a.x+(b.x-a.x)*j/k, y:a.y+(b.y-a.y)*j/k });
+  }
+  return out;
+}
+function bridgeProfile(pts, maxRise){
+  const seg = [0];
+  for(let i=1;i<pts.length;i++) seg.push(seg[i-1] + Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y));
+  const L = seg[seg.length-1] || 1;
+  const rise = Math.min(maxRise, Math.max(0.45, L * 0.055));
+  return seg.map(d => rise * Math.sin(Math.PI * (d/L)));
+}
+function addBridge(buf, pts, hs, width, col){
+  const h = width/2, s = 0.12, THICK = 0.45;
+  for(let i=0;i<pts.length-1;i++){
+    const p0 = pts[i], p1 = pts[i+1], y0 = hs[i], y1 = hs[i+1];
+    const dx = p1.x-p0.x, dy = p1.y-p0.y, len = Math.hypot(dx,dy);
+    if(len < 0.05) continue;
+    const ox = (dy/len)*h, oy = (-dx/len)*h;
+    const L0 = {x:p0.x+ox, y:p0.y+oy}, L1 = {x:p1.x+ox, y:p1.y+oy};
+    const R1 = {x:p1.x-ox, y:p1.y-oy}, R0 = {x:p0.x-ox, y:p0.y-oy};
+    const UP = [0,1,0];
+    const A=[L0.x,y0,-L0.y], B=[L1.x,y1,-L1.y], C=[R1.x,y1,-R1.y], D=[R0.x,y0,-R0.y];
+    const uv = [L0,L1,R1,R0].map(p=>[p.x*s, p.y*s]);
+    buf.tri(A,B,C, UP,UP,UP, uv[0],uv[1],uv[2], col);
+    buf.tri(A,C,D, UP,UP,UP, uv[0],uv[2],uv[3], col);
+    // deck sides, so it reads as a solid span rather than a floating carpet
+    const nx = dy/len, nz = dx/len;
+    for(const [e0,e1,sg] of [[L0,L1,1],[R1,R0,-1]]){
+      const N = [nx*sg, 0, nz*sg];
+      const a=[e0.x,(sg>0?y0:y0)-THICK,-e0.y], b=[e1.x,(sg>0?y1:y1)-THICK,-e1.y],
+            c=[e1.x,y1,-e1.y], d=[e0.x,y0,-e0.y];
+      buf.tri(a,b,c, N,N,N, [0,0],[len/2,0],[len/2,1], col);
+      buf.tri(a,c,d, N,N,N, [0,0],[len/2,1],[0,1], col);
+    }
+  }
+}
+
+/* Road ribbon from a polyline */
+function addRibbon(buf, pts, width, y, col){
+  const h = width/2, UP = [0,1,0], s = 0.12;
+  for(let i=0;i<pts.length-1;i++){
+    const p0 = pts[i], p1 = pts[i+1];
+    const dx = p1.x-p0.x, dy = p1.y-p0.y, len = Math.hypot(dx,dy);
+    if(len < 0.05) continue;
+    const ox = (dy/len)*h, oy = (-dx/len)*h;
+    const A={x:p0.x+ox,y:p0.y+oy}, B={x:p1.x+ox,y:p1.y+oy},
+          C={x:p1.x-ox,y:p1.y-oy}, D={x:p0.x-ox,y:p0.y-oy};
+    const q = [A,B,C,D].map(p=>[p.x,y,-p.y]);
+    const uv = [A,B,C,D].map(p=>[p.x*s,p.y*s]);
+    buf.tri(q[0],q[1],q[2], UP,UP,UP, uv[0],uv[1],uv[2], col);
+    buf.tri(q[0],q[2],q[3], UP,UP,UP, uv[0],uv[2],uv[3], col);
+    // square joint patch so corners don't gap
+    if(i < pts.length-2){
+      const j = [[p1.x-h,p1.y-h],[p1.x+h,p1.y-h],[p1.x+h,p1.y+h],[p1.x-h,p1.y+h]].map(p=>({x:p[0],y:p[1]}));
+      const jq = j.map(p=>[p.x,y,-p.y]), ju = j.map(p=>[p.x*s,p.y*s]);
+      buf.tri(jq[0],jq[1],jq[2], UP,UP,UP, ju[0],ju[1],ju[2], col);
+      buf.tri(jq[0],jq[2],jq[3], UP,UP,UP, ju[0],ju[2],ju[3], col);
+    }
+  }
+}
+
+/* ==================================================================== OSM */
+const OVERPASS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+];
+let epIdx = 0;
+
+function query(s, w, n, e){
+  const b = `${s.toFixed(6)},${w.toFixed(6)},${n.toFixed(6)},${e.toFixed(6)}`;
+  return `[out:json][timeout:60];(
+    way["building"](${b});
+    relation["building"]["type"="multipolygon"](${b});
+    way["building:part"](${b});
+    way["highway"](${b});
+    way["natural"="water"](${b});
+    relation["natural"="water"]["type"="multipolygon"](${b});
+    way["waterway"~"^(riverbank|dock|canal)$"](${b});
+    way["leisure"~"^(park|garden|pitch|playground)$"](${b});
+    way["landuse"~"^(grass|forest|meadow|village_green|recreation_ground|cemetery)$"](${b});
+    way["amenity"="parking"](${b});
+    way["area:highway"](${b});
+  );out body;>;out skel qt;`;
+}
+
+async function overpass(q){
+  let lastErr;
+  for(let attempt=0; attempt<OVERPASS.length; attempt++){
+    const url = OVERPASS[(epIdx + attempt) % OVERPASS.length];
+    try {
+      const r = await fetch(url, {
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:'data=' + encodeURIComponent(q)
+      });
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      epIdx = (epIdx + attempt) % OVERPASS.length;
+      return j;
+    } catch(err){ lastErr = err; }
+  }
+  throw lastErr || new Error('all Overpass endpoints failed');
+}
+
+const parseLen = v => {
+  if(v == null) return NaN;
+  const s = String(v), m = s.match(/-?[\d.]+/);
+  if(!m) return NaN;
+  let n = parseFloat(m[0]);
+  if(!isFinite(n)) return NaN;
+  if(/'|ft|feet/i.test(s)) n *= 0.3048;
+  return n;
+};
+
+function ringOf(ids, nodes){
+  const out = [];
+  for(let i=0;i<ids.length;i++){
+    if(i === ids.length-1 && ids[i] === ids[0]) break;
+    const n = nodes.get(ids[i]); if(!n) continue;
+    const p = toLocal(n.lat, n.lon);
+    out.push({ x:p.x, y:-p.z });
+  }
+  return out;
+}
+
+/* stitch relation member ways into closed rings */
+function stitch(ids, ways, nodes){
+  const segs = ids.map(i=>ways.get(i)).filter(w=>w && w.nodes && w.nodes.length>1).map(w=>w.nodes.slice());
+  const rings = [];
+  let guard = 0;
+  while(segs.length && guard++ < 2000){
+    let cur = segs.shift(), moved = true;
+    while(cur[0] !== cur[cur.length-1] && moved){
+      moved = false;
+      for(let i=0;i<segs.length;i++){
+        const s = segs[i], head = cur[0], tail = cur[cur.length-1];
+        if(s[0] === tail)                 { cur = cur.concat(s.slice(1)); }
+        else if(s[s.length-1] === tail)   { cur = cur.concat(s.slice(0,-1).reverse()); }
+        else if(s[s.length-1] === head)   { cur = s.slice(0,-1).concat(cur); }
+        else if(s[0] === head)            { cur = s.slice(1).reverse().concat(cur); }
+        else continue;
+        segs.splice(i,1); moved = true; break;
+      }
+    }
+    if(cur.length > 3) rings.push(cur);
+  }
+  return rings.map(r=>ringOf(r, nodes)).filter(r=>r.length > 2);
+}
+
+const ROAD = {
+  motorway:[14,0x5b5c60], trunk:[13,0x5b5c60], primary:[11,0x60605f], secondary:[9.5,0x5c5d61],
+  tertiary:[8,0x5a5b5f], unclassified:[6.5,0x565759], residential:[6.5,0x565759],
+  living_street:[6,0x63615c], service:[4,0x55565a], pedestrian:[7,0x8a8479],
+  footway:[2.6,0x8d8578], path:[2.2,0x8a8070], cycleway:[2.6,0x7d5f57],
+  steps:[2.2,0x8d8578], track:[3,0x7a7060],
+};
+
+/* ------------------------------------------------------------ world state */
+const colliders = [];              // {ring, x0,x1,y0,y1, tile}
+const roads     = [];              // {name, pts, tile}
+const bridges   = [];              // {pts, hs, w, tile} — decks you can walk over
+let grid = new Map();
+const CELL = 24;
+const gk = (cx,cy) => cx + ',' + cy;
+
+function indexCollider(i){
+  const c = colliders[i];
+  for(let cx=Math.floor(c.x0/CELL); cx<=Math.floor(c.x1/CELL); cx++)
+    for(let cy=Math.floor(c.y0/CELL); cy<=Math.floor(c.y1/CELL); cy++){
+      const k = gk(cx,cy);
+      let a = grid.get(k); if(!a) grid.set(k, a = []);
+      a.push(i);
+    }
+}
+function rebuildGrid(){ grid = new Map(); for(let i=0;i<colliders.length;i++) indexCollider(i); }
+
+function inPoly(ring, x, y){
+  let inside = false;
+  for(let i=0, j=ring.length-1; i<ring.length; j=i++){
+    const a = ring[i], b = ring[j];
+    if((a.y > y) !== (b.y > y) && x < (b.x-a.x)*(y-a.y)/(b.y-a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+function blocked(x, z){
+  const y = -z;
+  for(const dx of [-BODY, 0, BODY]) for(const dy of [-BODY, 0, BODY]){
+    const px = x+dx, py = y+dy;
+    const a = grid.get(gk(Math.floor(px/CELL), Math.floor(py/CELL)));
+    if(!a) continue;
+    for(const i of a){
+      const c = colliders[i];
+      if(px < c.x0 || px > c.x1 || py < c.y0 || py > c.y1) continue;
+      if(inPoly(c.ring, px, py)) return true;
+    }
+  }
+  return false;
+}
+
+/* ------------------------------------------------------------ tile loader */
+let TILE = 600;
+const tiles = new Map();           // "tx,ty" -> {group, ways:Set, state}
+const seen  = new Set();           // OSM way/relation ids already built
+let pending = 0;
+const queue = [];
+
+const tkey = (tx,ty) => tx + ',' + ty;
+const tileOf = (x,z) => [Math.round(x/TILE), Math.round(z/TILE)];
+
+function tileBBox(tx, ty){
+  const x0 = tx*TILE - TILE/2, x1 = tx*TILE + TILE/2;
+  const z0 = ty*TILE - TILE/2, z1 = ty*TILE + TILE/2;
+  const a = toLatLon(x0, z1), b = toLatLon(x1, z0);   // z1 is further south
+  return [a.lat, a.lon, b.lat, b.lon];                // s,w,n,e
+}
+
+function buildTile(json, tx, ty){
+  const nodes = new Map(), ways = new Map(), rels = [];
+  for(const e of json.elements || []){
+    if(e.type === 'node') nodes.set(e.id, e);
+    else if(e.type === 'way') ways.set(e.id, e);
+    else if(e.type === 'relation') rels.push(e);
+  }
+
+  const walls = new Buf(), roofs = new Buf(), road = new Buf(),
+        water = new Buf(), green = new Buf(), quay = new Buf();
+  // canals sit well below street level, behind a stone wall
+  const WATER_Y = -1.9;
+  const waterRings = [];
+  const addCanal = rings => {
+    if(rings[0] && rings[0].length > 2) waterRings.push(rings[0]);
+    addFlat(water, rings, WATER_Y, [1,1,1], 0.05);
+    addSkirt(quay, rings, 0.10, WATER_Y, [0.82, 0.80, 0.76]);
+  };
+  const wayIds = new Set();
+  const key = tkey(tx,ty);
+  let count = 0;
+
+  const buildingFrom = (rings, tags, id) => {
+    let h = parseLen(tags.height);
+    if(!isFinite(h)){
+      const lv = parseFloat(tags['building:levels']);
+      // landmarks are often mapped with no height at all — a church or tower
+      // left at the residential default looks broken, so guess taller.
+      const big = tags['man_made'] === 'tower' || tags['tower:type']
+               || /^(church|cathedral|chapel)$/.test(tags.building);
+      h = isFinite(lv) ? lv * 3.25 + 1.2 : (big ? 34 : 11.5);
+    }
+    let min = parseLen(tags.min_height);
+    if(!isFinite(min)){
+      const ml = parseFloat(tags['building:min_level']);
+      min = isFinite(ml) ? ml * 3.25 : 0;
+    }
+    h = Math.max(min + 2.2, Math.min(h, 400));
+    const r = hash(id);
+    const base = new THREE.Color(PALETTE[(r*PALETTE.length)|0]);
+    const shade = 0.86 + hash(id*7+3)*0.3;
+    const col = [base.r*shade, base.g*shade, base.b*shade];
+    const rg = 0.30 + hash(id*13+7)*0.22;
+    addBuilding(walls, roofs, rings, min, h, col, [rg*0.95, rg, rg*1.06]);
+    count++;
+    // collision from the outer ring
+    const o = rings[0];
+    if(o && o.length > 2){
+      let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+      for(const p of o){ if(p.x<x0)x0=p.x; if(p.x>x1)x1=p.x; if(p.y<y0)y0=p.y; if(p.y>y1)y1=p.y; }
+      colliders.push({ ring:o, x0,x1,y0,y1, tile:key });
+      indexCollider(colliders.length-1);
+    }
+  };
+
+  // ---- relations (multipolygon buildings + water)
+  for(const rel of rels){
+    if(seen.has('r'+rel.id)) continue;
+    seen.add('r'+rel.id); wayIds.add('r'+rel.id);
+    const t = rel.tags || {};
+    const outerIds = [], innerIds = [];
+    for(const m of rel.members || []){
+      if(m.type !== 'way') continue;
+      (m.role === 'inner' ? innerIds : outerIds).push(m.ref);
+    }
+    const outers = stitch(outerIds, ways, nodes);
+    const inners = stitch(innerIds, ways, nodes);
+    if(!outers.length) continue;
+    if(t.building){
+      for(const o of outers) buildingFrom([o, ...inners], t, rel.id);
+    } else if(t.natural === 'water'){
+      for(const o of outers) addCanal([o, ...inners]);
+    }
+  }
+
+  // ---- ways
+  for(const w of ways.values()){
+    const t = w.tags;
+    if(!t) continue;
+    if(seen.has(w.id)) continue;
+    const closed = w.nodes.length > 3 && w.nodes[0] === w.nodes[w.nodes.length-1];
+
+    if((t.building || t['building:part']) && closed){
+      seen.add(w.id); wayIds.add(w.id);
+      buildingFrom([ringOf(w.nodes, nodes)], t, w.id);
+    }
+    else if(t.highway && ROAD[t.highway]){
+      seen.add(w.id); wayIds.add(w.id);
+      const pts = ringOf(w.nodes, nodes);
+      if(closed && (t.area === 'yes' || t.highway === 'pedestrian')){
+        addFlat(road, [pts], 0.05, [1,1,1], 0.12);
+      } else if(pts.length > 1){
+        const src = w.nodes.map(id=>nodes.get(id)).filter(Boolean)
+                     .map(n=>{ const p = toLocal(n.lat,n.lon); return {x:p.x, y:-p.z}; });
+        const [wd, cl] = ROAD[t.highway];
+        const lanes = parseFloat(t.lanes);
+        const width = isFinite(lanes) ? Math.max(wd, lanes*3.1) : wd;
+        const c = new THREE.Color(cl);
+        if(t.bridge && t.bridge !== 'no'){
+          const bp = densify(src, 2.5);
+          const hs = bridgeProfile(bp, 1.45);
+          addBridge(road, bp, hs, width, [c.r*1.06, c.g*1.06, c.b*1.06]);
+          bridges.push({ pts:bp, hs, w:width/2 + 1.0, tile:key });
+        } else {
+          addRibbon(road, src, width, 0.04 + (t.highway==='footway'?0.01:0), [c.r,c.g,c.b]);
+        }
+        if(t.name) roads.push({ name:t.name, pts:src, tile:key });
+      }
+    }
+    else if(closed && (t.natural === 'water' || /^(riverbank|dock|canal)$/.test(t.waterway||''))){
+      seen.add(w.id); wayIds.add(w.id);
+      addCanal([ringOf(w.nodes, nodes)]);
+    }
+    else if(closed && (t.leisure || /^(grass|forest|meadow|village_green|recreation_ground|cemetery)$/.test(t.landuse||''))){
+      seen.add(w.id); wayIds.add(w.id);
+      addFlat(green, [ringOf(w.nodes, nodes)], 0.03, [1,1,1], 0.06);
+    }
+    else if(closed && t.amenity === 'parking'){
+      seen.add(w.id); wayIds.add(w.id);
+      addFlat(road, [ringOf(w.nodes, nodes)], 0.03, [0.62,0.62,0.63], 0.12);
+    }
+  }
+
+  // Land for this tile, with the canals punched out of it. One flat quad per
+  // tile tiles seamlessly with its neighbours and leaves the water visible.
+  const land = new Buf();
+  const lx0 = tx*TILE - TILE/2, lx1 = tx*TILE + TILE/2;
+  const ly0 = -(ty*TILE + TILE/2), ly1 = -(ty*TILE - TILE/2);
+  const rect = [{x:lx0,y:ly0},{x:lx1,y:ly0},{x:lx1,y:ly1},{x:lx0,y:ly1}];
+  const holes = [];
+  for(const r of waterRings){
+    const cl = clipToRect(r, lx0+0.3, ly0+0.3, lx1-0.3, ly1-0.3);
+    if(cl.length > 2) holes.push(cl);
+  }
+  addFlat(land, [rect, ...holes], 0, [1,1,1], 0.35);
+  if(land.empty) addFlat(land, [rect], 0, [1,1,1], 0.35);   // holes defeated earcut
+
+  const g = new THREE.Group();
+  const push = (buf, mat, shadow) => {
+    if(buf.empty) return;
+    const m = new THREE.Mesh(buf.geometry(), mat);
+    m.castShadow = !!shadow; m.receiveShadow = true;
+    g.add(m);
+  };
+  push(land,  MAT.paving, false);
+  push(green, MAT.green, false);
+  push(water, MAT.water, false);
+  push(quay,  MAT.quay,  false);
+  push(road,  MAT.road,  false);
+  push(walls, MAT.wall,  true);
+  push(roofs, MAT.roof,  true);
+  world.add(g);
+  tiles.set(key, { group:g, ways:wayIds, state:'ready' });
+  return count;
+}
+
+function disposeTile(key){
+  const t = tiles.get(key);
+  if(!t) return;
+  t.group.traverse(o=>{ if(o.geometry) o.geometry.dispose(); });
+  world.remove(t.group);
+  for(const id of t.ways) seen.delete(id);
+  tiles.delete(key);
+  for(let i=colliders.length-1;i>=0;i--) if(colliders[i].tile === key) colliders.splice(i,1);
+  for(let i=roads.length-1;i>=0;i--)     if(roads[i].tile === key) roads.splice(i,1);
+  for(let i=bridges.length-1;i>=0;i--)   if(bridges[i].tile === key) bridges.splice(i,1);
+  rebuildGrid();
+}
+
+async function loadTile(tx, ty){
+  const key = tkey(tx,ty);
+  if(tiles.has(key)) return;
+  tiles.set(key, { group:new THREE.Group(), ways:new Set(), state:'loading' });
+  const [s,w,n,e] = tileBBox(tx,ty);
+  let json;
+  try { json = await overpass(query(s,w,n,e)); }
+  catch(err){ tiles.delete(key); throw err; }   // else the tile is never retried
+  tiles.delete(key);
+  return buildTile(json, tx, ty);
+}
+
+function enqueue(tx, ty){
+  const key = tkey(tx,ty);
+  if(tiles.has(key) || queue.some(q=>q[0]===tx && q[1]===ty)) return;
+  queue.push([tx,ty]);
+}
+async function pump(){
+  if(pending > 0 || !queue.length) return;
+  const [tx,ty] = queue.shift();
+  pending++;
+  try { await loadTile(tx,ty); } catch(err){ console.warn('tile failed', tx, ty, err); }
+  pending--;
+  setTimeout(pump, 250);
+}
+
+/* ================================================================ player */
+const player = { x:0, z:0, y:0, yaw:0, pitch:0, bob:0, speed:0 };
+const keys = new Set();
+let locked = false, dragging = false, lastX = 0, lastY = 0, running = false;
+
+// Filler beneath everything, seen only past the loaded tiles — it must sit
+// below the canal bed or it would cover the water.
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), MAT.void_);
+ground.rotation.x = -Math.PI/2;
+ground.position.y = -2.6;
+ground.receiveShadow = true;
+scene.add(ground);
+
+addEventListener('keydown', e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  keys.add(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  if(e.key === 'Shift') running = true;
+  if(e.key === '[' || e.key === ']'){          // scrub the sun a quarter hour
+    el.live.checked = false;
+    let h = parseFloat(el.hour.value) + (e.key === ']' ? 0.25 : -0.25);
+    el.hour.value = ((h % 24) + 24) % 24;
+    updateSun();
+  }
+});
+addEventListener('keyup', e=>{
+  keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  if(e.key === 'Shift') running = false;
+});
+addEventListener('blur', ()=>{ keys.clear(); running = false; });
+
+const cv = $('#c');
+cv.addEventListener('click', ()=>{ if(el.hud.classList.contains('on') && !locked) cv.requestPointerLock(); });
+document.addEventListener('pointerlockchange', ()=>{ locked = document.pointerLockElement === cv; });
+cv.addEventListener('mousedown', e=>{ dragging = true; lastX = e.clientX; lastY = e.clientY; });
+addEventListener('mouseup', ()=>{ dragging = false; });
+addEventListener('mousemove', e=>{
+  let dx = 0, dy = 0;
+  if(locked){ dx = e.movementX; dy = e.movementY; }
+  else if(dragging){ dx = e.clientX-lastX; dy = e.clientY-lastY; lastX = e.clientX; lastY = e.clientY; }
+  else return;
+  player.yaw   -= dx * 0.0022;
+  player.pitch -= dy * 0.0022;
+  player.pitch = Math.max(-1.25, Math.min(1.25, player.pitch));
+});
+// touch: drag to look, two fingers to walk
+let touchWalk = false;
+cv.addEventListener('touchstart', e=>{
+  if(e.touches.length === 2) touchWalk = true;
+  lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+}, {passive:true});
+cv.addEventListener('touchmove', e=>{
+  const t = e.touches[0];
+  player.yaw   -= (t.clientX-lastX) * 0.005;
+  player.pitch -= (t.clientY-lastY) * 0.005;
+  player.pitch = Math.max(-1.25, Math.min(1.25, player.pitch));
+  lastX = t.clientX; lastY = t.clientY;
+}, {passive:true});
+cv.addEventListener('touchend', ()=>{ touchWalk = false; }, {passive:true});
+
+function tryMove(nx, nz){
+  if(!blocked(nx, nz)){ player.x = nx; player.z = nz; return; }
+  if(!blocked(nx, player.z)){ player.x = nx; return; }   // slide along walls
+  if(!blocked(player.x, nz)){ player.z = nz; }
+}
+function freeSpot(x, z){
+  if(!blocked(x,z)) return [x,z];
+  for(let r=2; r<=90; r+=2)
+    for(let a=0; a<16; a++){
+      const t = a/16*Math.PI*2, nx = x+Math.cos(t)*r, nz = z+Math.sin(t)*r;
+      if(!blocked(nx,nz)) return [nx,nz];
+    }
+  return [x,z];
+}
+
+/* ---------------------------------------------------------------- minimap */
+const mg = el.map.getContext('2d');
+function drawMap(){
+  const W = el.map.width, H = el.map.height, R = 150, S = W/(R*2);
+  mg.clearRect(0,0,W,H);
+  mg.save(); mg.translate(W/2, H/2); mg.rotate(player.yaw); mg.scale(S,S);
+  const py = -player.z;
+  mg.strokeStyle = 'rgba(150,170,190,.55)'; mg.lineWidth = 5/S*1.2;
+  for(const r of roads){
+    let started = false;
+    mg.beginPath();
+    for(const p of r.pts){
+      const dx = p.x-player.x, dy = p.y-py;
+      if(Math.abs(dx) > R+50 || Math.abs(dy) > R+50){ started = false; continue; }
+      if(!started){ mg.moveTo(dx,-dy); started = true; } else mg.lineTo(dx,-dy);
+    }
+    mg.stroke();
+  }
+  mg.fillStyle = 'rgba(240,160,75,.75)';
+  for(const c of colliders){
+    if(c.x1 < player.x-R || c.x0 > player.x+R || c.y1 < py-R || c.y0 > py+R) continue;
+    mg.beginPath();
+    for(let i=0;i<c.ring.length;i++){
+      const p = c.ring[i];
+      i ? mg.lineTo(p.x-player.x, -(p.y-py)) : mg.moveTo(p.x-player.x, -(p.y-py));
+    }
+    mg.closePath(); mg.fill();
+  }
+  mg.restore();
+  mg.fillStyle = '#fff';
+  mg.beginPath(); mg.moveTo(W/2, H/2-13); mg.lineTo(W/2-9, H/2+10); mg.lineTo(W/2+9, H/2+10);
+  mg.closePath(); mg.fill();
+}
+
+/* Height of any bridge deck under the walker, so you rise over the canal
+   instead of clipping through the span. */
+function deckAt(x, z){
+  const y = -z; let best = 0;
+  for(const b of bridges){
+    for(let i=0;i<b.pts.length-1;i++){
+      const a = b.pts[i], c = b.pts[i+1];
+      const vx = c.x-a.x, vy = c.y-a.y, L = vx*vx+vy*vy;
+      let t = L ? ((x-a.x)*vx + (y-a.y)*vy)/L : 0;
+      t = Math.max(0, Math.min(1, t));
+      const dx = x-(a.x+vx*t), dy = y-(a.y+vy*t);
+      if(dx*dx + dy*dy < b.w*b.w){
+        const h = b.hs[i] + (b.hs[i+1]-b.hs[i])*t;
+        if(h > best) best = h;
+      }
+    }
+  }
+  return best;
+}
+
+function nearestStreet(){
+  const py = -player.z;
+  let best = null, bd = 34*34;
+  for(const r of roads){
+    for(let i=0;i<r.pts.length-1;i++){
+      const a = r.pts[i], b = r.pts[i+1];
+      const vx = b.x-a.x, vy = b.y-a.y, L = vx*vx+vy*vy;
+      let t = L ? ((player.x-a.x)*vx + (py-a.y)*vy)/L : 0;
+      t = Math.max(0, Math.min(1, t));
+      const dx = player.x - (a.x+vx*t), dy = py - (a.y+vy*t);
+      const d = dx*dx+dy*dy;
+      if(d < bd){ bd = d; best = r.name; }
+    }
+  }
+  return best;
+}
+
+/* ------------------------------------------------------------- main loop */
+const clock = new THREE.Clock();
+let hudT = 0;
+
+function frame(){
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.1);
+
+  if(el.hud.classList.contains('on')){
+    const has = k => keys.has(k);
+    if(has('ArrowLeft'))  player.yaw += TURN*dt;
+    if(has('ArrowRight')) player.yaw -= TURN*dt;
+
+    let fwd = 0, str = 0;
+    if(has('ArrowUp')   || has('w') || touchWalk) fwd += 1;
+    if(has('ArrowDown') || has('s')) fwd -= 1;
+    if(has('a')) str -= 1;
+    if(has('d')) str += 1;
+
+    const sp = running ? RUN : WALK;
+    if(fwd || str){
+      const len = Math.hypot(fwd, str);
+      const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+      const rx =  Math.cos(player.yaw), rz = -Math.sin(player.yaw);
+      const mx = (fx*fwd + rx*str)/len * sp * dt;
+      const mz = (fz*fwd + rz*str)/len * sp * dt;
+      tryMove(player.x + mx, player.z + mz);
+      player.bob += sp*dt*2.4;
+      player.speed = sp;
+    } else player.speed = 0;
+
+    // stream in neighbouring tiles
+    const [tx,ty] = tileOf(player.x, player.z);
+    for(let dx=-1; dx<=1; dx++) for(let dy=-1; dy<=1; dy++) enqueue(tx+dx, ty+dy);
+    pump();
+    if(tiles.size > 26){
+      for(const k of [...tiles.keys()]){
+        const [a,b] = k.split(',').map(Number);
+        if(Math.abs(a-tx) > 2 || Math.abs(b-ty) > 2) disposeTile(k);
+      }
+    }
+  }
+
+  const deck = deckAt(player.x, player.z);
+  player.y += (deck - player.y) * Math.min(1, dt*9);      // ease onto the span
+  const bob = player.speed ? Math.sin(player.bob)*0.035 : 0;
+  camera.position.set(player.x, EYE + player.y + bob, player.z);
+  camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  sky.position.copy(camera.position);
+  ground.position.set(Math.round(player.x/500)*500, -2.6, Math.round(player.z/500)*500);
+  sun.target.position.set(player.x, 0, player.z);
+  sun.position.set(player.x + sunDir.x*200, Math.max(6, sunDir.y*200), player.z + sunDir.z*200);
+
+  hudT += dt;
+  if(hudT > 0.2){
+    hudT = 0;
+    drawMap();
+    const st = nearestStreet();
+    el.street.textContent = st || '';
+    const ll = toLatLon(player.x, player.z);
+    el.coords.textContent = `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)}`;
+    const q = queue.length + pending;
+    el.status.textContent = q ? `loading ${q} more block${q>1?'s':''}…` : `${tiles.size} blocks loaded`;
+    updateSun();
+    syncHash();
+  }
+
+  renderer.render(scene, camera);
+}
+
+function resize(){
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+frame();
+
+/* ==================================================================== UI */
+function showLoader(msg){ el.ltext.textContent = msg; el.loader.classList.add('on'); }
+function hideLoader(){ el.loader.classList.remove('on'); }
+
+function resetWorld(){
+  for(const k of [...tiles.keys()]) disposeTile(k);
+  tiles.clear(); seen.clear(); queue.length = 0;
+  colliders.length = 0; roads.length = 0; bridges.length = 0; rebuildGrid();
+  while(world.children.length){
+    const c = world.children.pop();
+    c.traverse(o=>{ if(o.geometry) o.geometry.dispose(); });
+  }
+}
+
+async function go(lat, lon, label){
+  el.err.textContent = '';
+  showLoader('asking OpenStreetMap for buildings near ' + (label || 'you') + '…');
+  resetWorld();
+  lat0 = lat; lon0 = lon;
+  mLon = 111320 * Math.cos(lat0 * Math.PI/180);
+  TILE = parseInt(el.rad.value, 10);
+  fetchZone(lat, lon);          // async; updates the clock when it lands
+  updateSun();
+  player.x = 0; player.z = 0; player.yaw = 0; player.pitch = 0;
+
+  try {
+    const n = await loadTile(0, 0);
+    if(!n) el.err.textContent = 'No buildings found there — the view may be empty. Try a denser spot.';
+  } catch(err){
+    hideLoader();
+    el.err.textContent = 'Could not reach Overpass: ' + err.message + ' — try again in a moment.';
+    return;
+  }
+  const [fx, fz] = freeSpot(0, 0);
+  player.x = fx; player.z = fz;
+  // look down whichever street segment we actually landed next to
+  let bd = Infinity, dir = null;
+  for(const r of roads) for(let i=0;i<r.pts.length-1;i++){
+    const a = r.pts[i], b = r.pts[i+1];
+    const mx = (a.x+b.x)/2 - player.x, my = (a.y+b.y)/2 - (-player.z);
+    const d = mx*mx + my*my;
+    if(d < bd){ bd = d; dir = [b.x-a.x, b.y-a.y]; }
+  }
+  if(dir) player.yaw = Math.atan2(-dir[0], dir[1]);
+  hideLoader();
+  el.start.classList.add('hidden');
+  el.hud.classList.add('on');
+  clock.getDelta();
+  for(let dx=-1; dx<=1; dx++) for(let dy=-1; dy<=1; dy++) if(dx||dy) enqueue(dx,dy);
+  pump();
+}
+
+el.back.addEventListener('click', ()=>{
+  document.exitPointerLock();
+  el.hud.classList.remove('on');
+  el.start.classList.remove('hidden');
+  el.q.focus(); el.q.select();
+});
+
+/* presets */
+for(const [name, la, lo] of PRESETS){
+  const b = document.createElement('div');
+  b.className = 'chip'; b.textContent = name;
+  b.onclick = ()=> go(la, lo, name);
+  el.chips.appendChild(b);
+}
+
+/* geocoding */
+const COORD = /^\s*(-?\d{1,3}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/;
+let sugItems = [], sugSel = -1, tmr = 0, seq = 0;
+
+async function suggest(q){
+  const my = ++seq;
+  const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=1&q='
+            + encodeURIComponent(q);
+  try {
+    const r = await fetch(url, { headers:{ 'Accept-Language':'en' } });
+    const j = await r.json();
+    if(my !== seq) return;
+    sugItems = j; sugSel = -1;
+    el.sug.innerHTML = '';
+    for(const [i, s] of j.entries()){
+      const d = document.createElement('div');
+      d.className = 'sug';
+      const parts = s.display_name.split(', ');
+      d.innerHTML = `<b>${parts.slice(0,2).join(', ')}</b><i>${parts.slice(2).join(', ')}</i>`;
+      d.onclick = ()=>{ el.sug.innerHTML=''; go(+s.lat, +s.lon, parts[0]); };
+      el.sug.appendChild(d);
+    }
+  } catch(err){ el.err.textContent = 'Geocoder unreachable: ' + err.message; }
+}
+
+el.q.addEventListener('input', ()=>{
+  clearTimeout(tmr);
+  const v = el.q.value.trim();
+  if(v.length < 3 || COORD.test(v)){ el.sug.innerHTML = ''; return; }
+  tmr = setTimeout(()=>suggest(v), 380);
+});
+el.q.addEventListener('keydown', e=>{
+  const n = el.sug.children.length;
+  if(e.key === 'ArrowDown' && n){ e.preventDefault(); sugSel = (sugSel+1)%n; paint(); }
+  else if(e.key === 'ArrowUp' && n){ e.preventDefault(); sugSel = (sugSel-1+n)%n; paint(); }
+  else if(e.key === 'Enter'){
+    e.preventDefault();
+    const v = el.q.value.trim();
+    const m = v.match(COORD);
+    if(m){ el.sug.innerHTML=''; go(+m[1], +m[2], v); return; }
+    if(sugSel >= 0 && sugItems[sugSel]){
+      const s = sugItems[sugSel]; el.sug.innerHTML='';
+      go(+s.lat, +s.lon, s.display_name.split(',')[0]); return;
+    }
+    if(v.length > 2){
+      showLoader('looking up “' + v + '”…');
+      suggest(v).then(()=>{
+        hideLoader();
+        if(sugItems[0]){ const s = sugItems[0]; el.sug.innerHTML=''; go(+s.lat,+s.lon,s.display_name.split(',')[0]); }
+        else el.err.textContent = 'No match for that address.';
+      });
+    }
+  }
+  function paint(){
+    [...el.sug.children].forEach((c,i)=>c.classList.toggle('sel', i===sugSel));
+  }
+});
+
+/* deep link: index.html#52.3752,4.8840 drops you straight in, and the hash
+   tracks you as you walk so any spot you find is a shareable URL. */
+let hashT = 0;
+function syncHash(){
+  const now = performance.now();
+  if(now - hashT < 2000) return;
+  hashT = now;
+  const ll = toLatLon(player.x, player.z);
+  history.replaceState(null, '', '#' + ll.lat.toFixed(5) + ',' + ll.lon.toFixed(5));
+}
+function fromHash(){
+  const m = decodeURIComponent(location.hash.slice(1)).match(COORD);
+  if(m){ el.q.value = m[1] + ', ' + m[2]; go(+m[1], +m[2], 'shared link'); return true; }
+  return false;
+}
+
+updateSun();
+el.live.addEventListener('change', updateSun);
+el.hour.addEventListener('input', ()=>{ el.live.checked = false; updateSun(); });
+el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checked; scene.traverse(o=>{ if(o.material) o.material.needsUpdate = true; }); });
+/* One handle on the innards, for poking at it from the console. */
+window.city = { THREE, scene, world, camera, renderer, player, tiles,
+                colliders, roads, bridges, MAT, TEX, go, solarPosition };
+if(!fromHash()) el.q.focus();
+addEventListener('hashchange', fromHash);
+</script>
+</body>
+</html>

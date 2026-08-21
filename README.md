@@ -112,6 +112,42 @@ so wandering for a long time does not grow without bound.
 against the polygons in the neighbouring cells and slides along walls rather than
 stopping dead.
 
+## Textures, and the street-view question
+
+The facades are procedurally drawn to a canvas — plaster grain, storey bands,
+window reveals, glazing bars — and UV-mapped in real metres so the window rhythm
+is 3 m regardless of building size. Open alternatives, in order of how much they
+buy you:
+
+- **CC0 material libraries** — [ambientCG](https://ambientcg.com/) and
+  [Poly Haven](https://polyhaven.com/textures) publish photogrammetry-derived PBR
+  brick, plaster, roof and paving sets under CC0. Public JSON APIs, CORS open, no
+  attribution required. A curated dozen keyed off region would be the single
+  biggest visual upgrade here, with no coverage gaps and no licence friction.
+- **OSM's own appearance tags** — `building:colour`, `building:material`,
+  `roof:colour`, `roof:shape`. Free and already in the Overpass response, but the
+  coverage is thin: in the Jordaan sample tile, 87.4% of buildings carry a
+  surveyed *height* and only 0.1% carry a colour. Worth honouring where present,
+  but it will not carry a city.
+- **[KartaView](https://kartaview.org/)** — open street-level photography,
+  CC BY-SA. Genuinely frictionless: no token at all, `Access-Control-Allow-Origin: *`,
+  and it returns geotagged JPEGs with a compass heading. There is a 2021 shot
+  three metres from the Prinsengracht spawn point.
+- **[Mapillary](https://www.mapillary.com/)** — much larger coverage, same
+  CC BY-SA licence, but needs a free OAuth token.
+
+Projecting that photography onto the walls is the obvious next thought, and it is
+harder than it looks. The imagery is shot from car dashboards: the lower third is
+windscreen and bonnet, and the facades you want are behind bikes, trees, bollards
+and pedestrians. Doing it properly means multi-view fusion plus semantic
+segmentation to mask out the clutter, then relighting to reconcile exposures —
+which is why the pipelines that do this well are large. A far cheaper use of the
+same data is to show the nearest real photo in a corner panel as you walk, so you
+can hold the model up against the street it came from.
+
+Google Street View imagery is not an option regardless — using it this way is
+against their terms.
+
 ## Known limits
 
 - **The ground is flat.** There is no terrain elevation, so hilly cities are
