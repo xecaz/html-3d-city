@@ -8,8 +8,9 @@ Enter, and a moment later you are standing on the quay in first person with the
 arrow keys under your fingers. Keep walking and the next blocks are fetched and
 built in front of you, so there is no edge of the world to bump into.
 
-No build step, no bundler, no `node_modules`, no API keys, no account. One file,
-about a thousand lines, and three.js from a CDN.
+No build step, no bundler, no `node_modules`, no API keys, no account. One HTML
+file of about a thousand lines, plus a vendored copy of three.js — so the only
+thing it needs from the network at runtime is the map data itself.
 
 ## Run it
 
@@ -18,8 +19,14 @@ python3 -m http.server 8777
 # then open http://127.0.0.1:8777/index.html
 ```
 
-Any static server will do — it must be `http://`, not `file://`, or the module
-import and the API calls will be blocked. Jump straight to a spot with a hash:
+It is entirely static: there is no server-side process, and your host never
+makes an outbound request of its own, because every API call is made by the
+visitor's browser. Any static server will do — nginx, Apache, Caddy, S3, GitHub
+Pages. It does have to be served over `http://` or `https://` rather than
+`file://`, or the module import and the API calls are blocked. Every external
+origin it touches is HTTPS, so there is no mixed-content problem on a TLS site.
+
+Jump straight to a spot with a hash:
 
 ```
 http://127.0.0.1:8777/index.html#52.3752,4.8840
@@ -49,8 +56,11 @@ Everything is public and free, and nothing is scraped.
   per tile as you move, from three mirrors with automatic failover.
 - **[Nominatim](https://nominatim.openstreetmap.org/)** — turns what you type into
   a latitude and longitude.
-- **[three.js](https://threejs.org/) r169** — WebGL rendering, loaded from a CDN
-  through an import map.
+- **[three.js](https://threejs.org/) r169** — WebGL rendering. Vendored into
+  `vendor/` (MIT, licence included) and wired up with an import map, so there is
+  no CDN in the runtime path and the page cannot be broken by someone else's
+  outage. Swap in the unminified `three.module.js` from the same release if you
+  ever want to step through it in a debugger.
 
 A note on Google, since it is the obvious question: the Blender plugin that does
 something similar (Blosm) uses OpenStreetMap for its free path. Scraping Google
