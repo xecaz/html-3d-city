@@ -45,6 +45,9 @@ The hash follows you as you walk, so any place you find is a shareable link.
 | <kbd>Shift</kbd> | run |
 | <kbd>[</kbd> <kbd>]</kbd> | rewind / advance the sun by 15 minutes |
 | <kbd>F</kbd> | hold to express an opinion — they notice |
+| <kbd>1</kbd> | slap, and put away whatever you were holding |
+| <kbd>2</kbd>–<kbd>5</kbd> | pistol, minigun, shotgun, AK-47 |
+| <kbd>Space</kbd> | fire |
 
 The search box takes a street address, a place name, or a raw `lat, lon` pair.
 
@@ -164,6 +167,37 @@ share endpoint nodes, so the junctions fall out of the data for free — 147 of
 them in one Jordaan tile), and turns on its heel at a dead end. They ride bridge
 decks like you do.
 
+**Consequences.** Everyone carries a health bar above their head, billboarded on
+yaw so it stays upright. <kbd>1</kbd> slaps whoever is in front of you for a
+little damage and holsters whatever you were carrying — which is what restores
+the two-handed gesture, since a hand on a grip cannot also make a point.
+<kbd>2</kbd>–<kbd>5</kbd> draw the arsenal and <kbd>Space</kbd> fires it. The
+report is synthesised with WebAudio rather than shipped as a file, so the page
+stays one document; each weapon just shifts the filter sweep and envelope.
+
+| | shots to kill | rate | reach | carries through |
+|---|---|---|---|---|
+| pistol | 3 | 2.9/s | 70 m | 1 |
+| minigun | 2 | 13.3/s | 90 m | 2–3 |
+| shotgun | 2 | 1.2/s | 26 m | 1–2 |
+| AK-47 | 3 | 9.1/s | 85 m | 2 |
+
+A round carries through the nearest N people along the sightline, N rolled per
+shot from the weapon's range. The minigun's six barrels idle slowly and wind up
+while the trigger is down.
+
+**Faces.** Four expressions drawn to canvas — happy, level, unhappy, wretched —
+one `InstancedMesh` each, with every person written into exactly one, so all
+four together cost only as many matrix writes as there are people. Everyone
+starts cheerful. Fingers count for a little, bullet wounds for three times as
+much, and being caught in a stampede for its own share.
+
+A gunshot carries 45 m. Most people within earshot bolt at 3–3.9 m/s; about
+three in ten decide you are the problem and come for you instead. Measured on a
+single shot: three gave chase, two ran. The dead stay where they fall, with a
+pool spreading under them for a second and a half, until they are far behind you
+or the backlog passes forty-five.
+
 They also mind being flipped off. Hold <kbd>F</kbd> where someone can see it —
 within 14 m, in front of you, and not facing away — and their face reddens. Do it
 to the same person twice and they abandon their errand and come after you,
@@ -224,9 +258,12 @@ against their terms.
 - **You can walk over water.** Canals are not solid, because making them solid
   would strand you whenever a bridge is missing from the data. You float across.
 - **Interiors do not exist.** These are hollow shells with no doors.
-- **Pedestrians do not avoid anything** — not you, not each other, not walls.
-  They follow their way and walk through whatever is in it, and a pursuer will
+- **Pedestrians do not avoid walls.** They are solid to each other and to you —
+  a crowd can pin you and you have to lean through it — but a pursuer will still
   come at you straight through a building rather than round it.
+- **Timers run on a clamped delta.** `dt` is capped at 0.1 s so a stall cannot
+  teleport you, which means on a machine rendering below 10 fps every cooldown
+  stretches proportionally.
 - **Landmark heights are guessed** when OSM has none, so the odd church tower is
   the wrong size.
 - **Overpass is a shared free service** run on donated hardware. Tiles are cached

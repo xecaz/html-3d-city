@@ -68,6 +68,12 @@
     text-shadow:0 1px 8px #000}
   #sunhud{position:absolute;left:20px;top:38px;font-size:12px;color:#b9c4cf;
     text-shadow:0 1px 8px #000;font-variant-numeric:tabular-nums}
+  #weapon{position:absolute;left:20px;top:58px;font-size:12px;color:#e8d9b0;
+    text-shadow:0 1px 8px #000}
+  #hit{position:absolute;inset:0;pointer-events:none;opacity:0;
+    background:radial-gradient(120% 90% at 50% 50%,rgba(190,25,20,0) 35%,rgba(190,25,20,.85) 100%)}
+  #dot{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;
+    border-radius:50%;background:rgba(255,255,255,.75);box-shadow:0 0 3px #000;display:none}
   #map{position:absolute;right:18px;bottom:18px;width:190px;height:190px;border-radius:10px;
     border:1px solid rgba(255,255,255,.15);background:rgba(10,13,17,.72);backdrop-filter:blur(3px)}
   #keys{position:absolute;right:18px;top:18px;text-align:right;font-size:11.5px;color:#b9c4cf;
@@ -87,11 +93,16 @@
 <div id="hud">
   <div id="status"></div>
   <div id="sunhud"></div>
+  <div id="weapon"></div>
+  <div id="dot"></div>
+  <div id="hit"></div>
   <div id="keys">
     <div><kbd>↑</kbd><kbd>↓</kbd> walk &nbsp; <kbd>←</kbd><kbd>→</kbd> turn</div>
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + mouse look</div>
     <div><kbd>Shift</kbd> run &nbsp; <kbd>Esc</kbd> free cursor</div>
     <div><kbd>[</kbd><kbd>]</kbd> rewind / advance the sun &nbsp; <kbd>F</kbd> gesture</div>
+    <div><kbd>1</kbd> slap &nbsp; <kbd>2</kbd> pistol &nbsp; <kbd>3</kbd> minigun</div>
+    <div><kbd>4</kbd> shotgun &nbsp; <kbd>5</kbd> AK-47 &nbsp; <kbd>Space</kbd> fire</div>
   </div>
   <button id="back">← new location</button>
   <div id="street"></div>
@@ -127,8 +138,8 @@
       <label><input type="checkbox" id="sh" checked> shadows</label>
       <label><input type="checkbox" id="showarms" checked> arms</label>
       <label><input type="checkbox" id="showpeople" checked> people</label>
-      <label><input type="checkbox" id="livetime" checked> sun at local time now</label>
-      <label>hour <input type="range" id="hour" min="0" max="23.75" step="0.25" value="15" style="width:130px">
+      <label><input type="checkbox" id="livetime"> sun at local time now</label>
+      <label>hour <input type="range" id="hour" min="0" max="23.75" step="0.25" value="13" style="width:130px">
         <span id="hourlbl" style="font-variant-numeric:tabular-nums;color:var(--text)">—</span></label>
     </div>
 
@@ -158,7 +169,7 @@ const el = {
   loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
   street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
   rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), showPeople:$('#showpeople'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
-  sun:$('#sunhud')
+  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot')
 };
 
 /* ---------------------------------------------------------------- config */
@@ -434,6 +445,9 @@ const MAT = {
   // tone sampled from running.arms.gif, lifted to an albedo since the gif
   // pixels already carry their own shading
   skin:  new THREE.MeshLambertMaterial({ color:0xc9a894, emissive:0x0d0908 }),
+  gun:   new THREE.MeshLambertMaterial({ color:0x2e3238, emissive:0x090a0c }),
+  wood:  new THREE.MeshLambertMaterial({ color:0x6b4423, emissive:0x0b0705 }),
+  flash: new THREE.MeshBasicMaterial({ color:0xffd98a, transparent:true, opacity:0.9 }),
 };
 
 /* muted Dutch-brick / plaster palette, picked deterministically per building */
@@ -1135,7 +1149,22 @@ scene.add(ground);
    bob so they keep step with whatever pace you are actually moving at. They
    slide down out of frame when you stand still and swing harder when you run. */
 let armsOn = true;
-const ARM = { lift:0, run:0, flip:0 };
+const ARM = { lift:0, run:0, flip:0, gun:0, slap:0 };
+/* Weapons. Slapping puts the gun away again, which is what restores the
+   two-handed version of the gesture. */
+let weapon = 0, slapT = 0, shootT = 0, shake = 0, hitFlash = 0;
+const WEAPONS = [
+  null,
+  // pen: how many people a round carries through, picked per shot
+  { name:'pistol',  cd:0.34,  dmg:0.34, spread:0.70, shake:0.50, reach:70, tone:1.00, pen:[1,1] },
+  { name:'minigun', cd:0.075, dmg:0.50, spread:1.15, shake:0.30, reach:90, tone:2.10, pen:[2,3] },
+  { name:'shotgun', cd:0.85,  dmg:0.55, spread:2.20, shake:0.90, reach:26, tone:0.62, pen:[1,2] },
+  { name:'AK-47',   cd:0.11,  dmg:0.34, spread:0.95, shake:0.42, reach:85, tone:1.35, pen:[2,2] },
+];
+const SLAP_DUR = 0.42, SLAP_CD = 0.5;
+let flashT = 0;
+const GUN_BASE = 1.05, GUN_BEND = 0.45;    // sum ~1.5 rad: hand points down-range
+const SLAP_BASE = 1.75, SLAP_BEND = 0.55;
 /* A hand, not a blob: flattened palm, four separated fingers curled into the
    loose fist you actually run with, and a thumb laid along the index side. */
 const CURL = -1.25, CURL_OUT = 0.06;      // curled fist vs one digit extended
@@ -1195,50 +1224,223 @@ function makeArm(side){
   shoulder.rotation.z = side * 0.20;
   return { shoulder, elbow, hand, side };
 }
+function makeShotgun(){
+  const g = new THREE.Group();
+  for(const dx of [-0.017, 0.017]){
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.42, 7), MAT.gun);
+    b.position.set(dx, -0.245, -0.004); g.add(b);
+  }
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.050, 0.20, 0.064), MAT.wood);
+  stock.position.set(0, -0.040, 0.014); g.add(stock);
+  const fore  = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.115, 0.052), MAT.wood);
+  fore.position.set(0, -0.205, 0.006); g.add(fore);
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.10, 6, 5), MAT.flash);
+  flash.position.set(0, -0.50, -0.004); flash.scale.set(1.4, 1.3, 1.4); flash.visible = false;
+  g.add(flash); g.visible = false; g.userData.flash = flash;
+  return g;
+}
+
+function makeAK(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.17, 0.064), MAT.gun);
+  body.position.set(0, -0.105, 0.004);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.32, 6), MAT.gun);
+  barrel.position.set(0, -0.325, 0.0);
+  const fore = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.105, 0.050), MAT.wood);
+  fore.position.set(0, -0.225, 0.004);
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.145, 0.054), MAT.wood);
+  stock.position.set(0, 0.045, 0.020); stock.rotation.x = 0.12;
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.090, 0.044), MAT.gun);
+  grip.position.set(0, -0.030, 0.058); grip.rotation.x = -0.38;
+  const mag = new THREE.Mesh(new THREE.BoxGeometry(0.030, 0.135, 0.046), MAT.gun);
+  mag.position.set(0, -0.155, 0.072); mag.rotation.x = 0.52;
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), MAT.flash);
+  flash.position.set(0, -0.50, 0.0); flash.scale.set(1, 1.5, 1); flash.visible = false;
+  g.add(body, barrel, fore, stock, grip, mag, flash);
+  g.visible = false; g.userData.flash = flash;
+  return g;
+}
+
+function makeMinigun(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.17, 0.105), MAT.gun);
+  body.position.set(0, -0.09, 0.012);
+  const spin = new THREE.Group();
+  spin.position.set(0, -0.185, -0.004);
+  for(let i = 0; i < 6; i++){
+    const a = i/6 * Math.PI*2;
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.0135, 0.0135, 0.30, 6), MAT.gun);
+    b.position.set(Math.cos(a)*0.034, -0.16, Math.sin(a)*0.034);
+    spin.add(b);
+  }
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.05, 10), MAT.gun);
+  hub.position.y = -0.012; spin.add(hub);
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.085, 6, 5), MAT.flash);
+  flash.position.set(0, -0.47, -0.004); flash.scale.set(1, 1.5, 1); flash.visible = false;
+  g.add(body, spin, flash);
+  g.visible = false;
+  g.userData.flash = flash; g.userData.spin = spin;
+  return g;
+}
+
+function makeGun(){
+  const g = new THREE.Group();
+  const body   = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.19, 0.072), MAT.gun);
+  body.position.set(0, -0.115, 0.004);
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.15, 0.032), MAT.gun);
+  barrel.position.set(0, -0.265, -0.012);
+  const grip   = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.105, 0.052), MAT.gun);
+  grip.position.set(0, -0.028, 0.062);
+  grip.rotation.x = -0.30;
+  const flash  = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 5), MAT.flash);
+  flash.position.set(0, -0.35, -0.012);
+  flash.scale.set(1, 1.6, 1);
+  flash.visible = false;
+  g.add(body, barrel, grip, flash);
+  g.visible = false;
+  g.userData.flash = flash;
+  return g;
+}
+
 const armL = makeArm(-1), armR = makeArm(1);
+const pistol = makeGun(), minigun = makeMinigun();
+const shotgun = makeShotgun(), ak = makeAK();
+armR.hand.add(pistol, minigun, shotgun, ak);
+const GUNS = [null, pistol, minigun, shotgun, ak];
 const arms = new THREE.Group();
 arms.add(armL.shoulder, armR.shoulder);
 camera.add(arms);
 scene.add(camera);      // a camera's children only update once it is in the graph
+
+/* One arm's pose, blended between four states: walking, making the gesture,
+   holding the gun, and mid-slap. */
+function poseArm(a, f, g, sl, swing, sgn){
+  const rest = Math.max(0, 1 - g - sl);
+  const amp  = (0.14 + 0.10*ARM.run) * (1 - 0.55*f) * rest;
+  let base = 1.25*(1-f) + FLIP_BASE*f;
+  let bend = (1.20 + 0.25*ARM.run)*(1-f) + FLIP_BEND*f;
+  base = base*(1-g) + GUN_BASE*g;   bend = bend*(1-g) + GUN_BEND*g;
+  base = base*(1-sl) + SLAP_BASE*sl; bend = bend*(1-sl) + SLAP_BEND*sl;
+  a.shoulder.rotation.x = base + sgn*swing*amp;
+  a.elbow.rotation.x    = bend + sgn*swing*0.35*(1 - 0.55*f)*rest;
+  // splayed while walking, drawn in for the gesture, centred on the gun,
+  // swung across the body for a slap
+  a.shoulder.rotation.z = a.side*0.20*(1-f)*rest - a.side*0.16*g - a.side*0.85*sl;
+  // roll: a quarter turn walking, a half turn to present the palm, none to grip
+  a.hand.rotation.y = (-a.side * Math.PI * (1 + f) / 2) * (1 - g);
+  const m = a.hand.userData.middle;
+  m.rotation.x = CURL + f*(CURL_OUT - CURL);
+  m.scale.y = 1 + f*0.9;
+  for(const d of a.hand.userData.others) d.rotation.x = CURL - f*0.30;
+}
 
 function animateArms(dt){
   if(!armsOn){ arms.visible = false; return; }
   const moving = player.speed > 0.01 ? 1 : 0;
   const rude   = keys.has('f') ? 1 : 0;
   const runAmt = Math.max(0, Math.min(1, (player.speed - WALK) / (RUN - WALK)));
-  ARM.lift += (Math.max(moving, rude) - ARM.lift) * Math.min(1, dt*7);
-  ARM.run  += (runAmt - ARM.run)  * Math.min(1, dt*4);
-  ARM.flip += (rude - ARM.flip)   * Math.min(1, dt*11);
 
-  const f = ARM.flip;
+  slapT  = Math.max(0, slapT - dt);
+  shootT = Math.max(0, shootT - dt);
+  flashT = Math.max(0, flashT - dt);
+  const elapsed = SLAP_CD - slapT;
+  const sl = (slapT > 0 && elapsed < SLAP_DUR) ? Math.sin(Math.PI*elapsed/SLAP_DUR) : 0;
+
+  const want = Math.max(moving, rude, weapon ? 1 : 0, sl > 0.01 ? 1 : 0);
+  ARM.lift += (want - ARM.lift) * Math.min(1, dt*7);
+  ARM.run  += (runAmt - ARM.run) * Math.min(1, dt*4);
+  ARM.flip += (rude - ARM.flip)  * Math.min(1, dt*11);
+  ARM.gun  += ((weapon ? 1 : 0) - ARM.gun) * Math.min(1, dt*9);
+  ARM.slap  = sl;
+
   const swing = Math.sin(player.bob);
-  const amp  = (0.14 + 0.10*ARM.run) * (1 - 0.55*f);  // keep pumping while gesturing
-  const base = 1.25*(1-f) + FLIP_BASE*f;
-  const bend = (1.20 + 0.25*ARM.run)*(1-f) + FLIP_BEND*f;
-  armL.shoulder.rotation.x = base + swing*amp;
-  armR.shoulder.rotation.x = base - swing*amp;
-  armL.elbow.rotation.x = bend + swing*0.35*(1 - 0.55*f);
-  armR.elbow.rotation.x = bend - swing*0.35*(1 - 0.55*f);
-  armL.shoulder.rotation.z = -0.20 + 0.20*f;         // draw them in to centre
-  armR.shoulder.rotation.z =  0.20 - 0.20*f;
-  for(const h of [armL.hand, armR.hand]){
-    const m = h.userData.middle;
-    m.rotation.x = CURL + f*(CURL_OUT - CURL);
-    m.scale.y = 1 + f*0.9;                      // stand it proud of the fist
-    for(const d of h.userData.others) d.rotation.x = CURL - f*0.30;
+  // the hand holding the gun cannot also make the gesture, so only the free
+  // one does — one finger instead of two
+  poseArm(armL, ARM.flip,                 0,       0,  swing,  1);
+  poseArm(armR, ARM.flip * (1 - ARM.gun), ARM.gun, sl, swing, -1);
+
+  const held = GUNS[weapon];
+  const shown = ARM.gun > 0.02;
+  for(let i = 1; i < GUNS.length; i++) GUNS[i].visible = (i === weapon) && shown;
+  if(held){
+    held.userData.flash.visible = flashT > 0;
+    // barrels idle slowly and wind up while the trigger is down
+    if(held.userData.spin) held.userData.spin.rotation.y += dt * (shootT > 0 ? 30 : 5);
   }
-  // Roll about the forearm: a quarter turn gives palms-inward with the thumb
-  // on top for running, a half turn presents the palm to the camera.
-  armL.hand.rotation.y = -armL.side * Math.PI * (1 + f) / 2;
-  armR.hand.rotation.y = -armR.side * Math.PI * (1 + f) / 2;
   arms.position.y = -0.36 * (1 - ARM.lift);
   arms.visible = ARM.lift > 0.02;
+}
+
+/* Gunshot, synthesised rather than shipped: a filtered noise crack over a low
+   thump. Keeps the page a single self-contained file, and the AudioContext is
+   only created on the first shot, by which point the browser has had the user
+   gesture it wants. */
+let actx = null, noiseBuf = null;
+function gunshot(w){
+  try {
+    if(!actx){
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return;
+      actx = new AC();
+    }
+    if(actx.state === 'suspended') actx.resume();
+    const t = actx.currentTime;
+    const tone = (w && w.tone) || 1;
+    if(!noiseBuf){
+      const len = Math.floor(actx.sampleRate * 0.3);
+      noiseBuf = actx.createBuffer(1, len, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for(let i = 0; i < len; i++) d[i] = (Math.random()*2 - 1) * Math.pow(1 - i/len, 3.2);
+    }
+    const src = actx.createBufferSource(); src.buffer = noiseBuf;
+    const lp = actx.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(4200 * tone, t);
+    lp.frequency.exponentialRampToValueAtTime(320 * tone, t + 0.26/tone);
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.5 / tone, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.30/tone);
+    src.connect(lp).connect(g).connect(actx.destination);
+    src.start(t);
+
+    const osc = actx.createOscillator(); osc.type = 'sine';
+    osc.frequency.setValueAtTime(170 * tone, t);
+    osc.frequency.exponentialRampToValueAtTime(46 * tone, t + 0.13/tone);
+    const g2 = actx.createGain();
+    g2.gain.setValueAtTime(0.45 / tone, t);
+    g2.gain.exponentialRampToValueAtTime(0.0008, t + 0.20/tone);
+    osc.connect(g2).connect(actx.destination);
+    osc.start(t); osc.stop(t + 0.24/tone);
+  } catch(e){ /* no audio device, or blocked — the gun still works */ }
+}
+
+function doSlap(){
+  if(slapT > 0) return;
+  slapT = SLAP_CD;
+  weapon = 0;                       // a hand in use is a gun put away
+  damageAt(2.5, 1.0, 0.12);
+}
+function doShoot(){
+  const w = WEAPONS[weapon];
+  if(!w || shootT > 0) return;
+  shootT = w.cd;
+  flashT = Math.min(0.07, w.cd);
+  gunshot(w);
+  reactToGunshot();
+  shake = Math.max(shake, w.shake);
+  const pen = w.pen[0] + Math.floor(Math.random() * (w.pen[1] - w.pen[0] + 1));
+  damageAt(w.reach, w.spread, w.dmg, pen);
 }
 
 addEventListener('keydown', e=>{
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
   keys.add(e.key.length === 1 ? e.key.toLowerCase() : e.key);
   if(e.key === 'Shift') running = true;
+  if(e.key === '1') doSlap();
+  if(e.key === '2') weapon = 1;
+  if(e.key === '3') weapon = 2;
+  if(e.key === '4') weapon = 3;
+  if(e.key === '5') weapon = 4;
+  if(e.key === ' ') doShoot();     // edge too, so a quick tap is never missed
   if(e.key === '[' || e.key === ']'){          // scrub the sun a quarter hour
     el.live.checked = false;
     let h = parseFloat(el.hour.value) + (e.key === ']' ? 0.25 : -0.25);
@@ -1375,6 +1577,9 @@ function nearestStreet(){
    are spawned and retired in a ring around you, sometimes alone and sometimes
    in twos and threes. */
 const PEOPLE_MAX = 80, SPAWN_MIN = 30, SPAWN_MAX = 130, DESPAWN = 170;
+// the dead stay where they fall, so the instance pool has to hold both
+const CORPSE_MAX = 45, MAX_BODIES = PEOPLE_MAX + CORPSE_MAX;
+let living = 0;
 let peopleOn = true, colorsDirty = true, spawnTimer = 0, gyCursor = 0;
 const npcs = [];
 const junctions = new Map();
@@ -1404,7 +1609,7 @@ const PARTS = {};
 for(const [k, geo] of [['head',NPC_G.head], ['torso',NPC_G.torso],
                        ['legL',NPC_G.leg], ['legR',NPC_G.leg],
                        ['armL',NPC_G.arm], ['armR',NPC_G.arm]]){
-  const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial(), PEOPLE_MAX);
+  const m = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial(), MAX_BODIES);
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   m.frustumCulled = false;          // they are placed by hand, not by the graph
   m.castShadow = true;
@@ -1412,6 +1617,82 @@ for(const [k, geo] of [['head',NPC_G.head], ['torso',NPC_G.torso],
   scene.add(m);
   PARTS[k] = m;
 }
+
+const BAR_W = 0.46, BAR_H = 0.060;
+const BARS = {};
+for(const [k, w, h, col] of [['bg', BAR_W+0.035, BAR_H+0.030, 0x101418],
+                             ['fg', BAR_W,       BAR_H,       0xffffff]]){
+  const m = new THREE.InstancedMesh(new THREE.PlaneGeometry(w, h),
+    new THREE.MeshBasicMaterial({ color:col, depthWrite:false, transparent:true, opacity:0.92 }),
+    MAX_BODIES);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.frustumCulled = false; m.renderOrder = 3; m.count = 0;
+  scene.add(m); BARS[k] = m;
+}
+const _barC = new THREE.Color();
+
+/* Faces. Four moods drawn to canvas, one InstancedMesh each; every person is
+   written into exactly one of them, so the four together still cost only as
+   many matrix writes as there are people. */
+function faceTexture(mood){
+  const S = 128, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.clearRect(0,0,S,S);
+  const ink = '#241a12';
+  const ey = S*0.40, ex = S*0.31, r = S*0.052;
+  g.fillStyle = ink;
+  for(const sx of [ex, S-ex]){ g.beginPath(); g.arc(sx, ey, r, 0, 6.2832); g.fill(); }
+  g.strokeStyle = ink; g.lineCap = 'round';
+  if(mood >= 2){                                   // brows only once it is bad
+    const tilt = mood === 3 ? S*0.075 : S*0.045;
+    g.lineWidth = S*0.042;
+    g.beginPath();
+    g.moveTo(ex - r*1.6, ey - r*2.4 - tilt*0.4); g.lineTo(ex + r*1.6, ey - r*2.4 + tilt);
+    g.moveTo(S-ex + r*1.6, ey - r*2.4 - tilt*0.4); g.lineTo(S-ex - r*1.6, ey - r*2.4 + tilt);
+    g.stroke();
+  }
+  const my = S*0.66, mw = S*0.19;
+  const curve = [0.20, 0.0, -0.13, -0.24][mood];   // positive smiles, negative frowns
+  g.lineWidth = S*0.050;
+  g.beginPath();
+  g.moveTo(S/2 - mw, my);
+  g.quadraticCurveTo(S/2, my + curve*S*0.62, S/2 + mw, my);
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const FACES = [];
+for(let m = 0; m < 4; m++){
+  const mesh = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(0.20, 0.20),
+    new THREE.MeshLambertMaterial({ map:faceTexture(m), transparent:true,
+                                    alphaTest:0.42, depthWrite:false }),
+    MAX_BODIES);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.frustumCulled = false; mesh.count = 0;
+  scene.add(mesh); FACES.push(mesh);
+}
+const faceCount = [0,0,0,0];
+
+/* Cheerful until something happens to them. Fingers sting, bullets sting more,
+   and being caught in a stampede is its own misery. */
+function faceOf(n){
+  if(n.down) return 3;
+  const sad = n.offended*1.2 + (1 - n.hp)*3 + (n.flee ? 1.5 : 0);
+  return sad <= 0.01 ? 0 : sad < 1.5 ? 1 : sad < 3 ? 2 : 3;
+}
+
+/* A pool under each body, spreading for a second and a half. Laid flat just
+   above the road so it does not fight the surface for depth. */
+const BLOOD = new THREE.InstancedMesh(
+  new THREE.CircleGeometry(1, 18).rotateX(-Math.PI/2),
+  new THREE.MeshBasicMaterial({ color:0x6b0f0c, transparent:true, opacity:0.82,
+                                depthWrite:false }),
+  MAX_BODIES);
+BLOOD.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+BLOOD.frustumCulled = false; BLOOD.renderOrder = 1; BLOOD.count = 0;
+scene.add(BLOOD);
 
 const segLen = (a,b) => Math.hypot(b.x-a.x, b.y-a.y) || 0.001;
 
@@ -1457,13 +1738,15 @@ function spawnGroup(){
   const dir  = Math.random() < 0.5 ? 1 : -1;
   const lane = sidewalk(s.r);
   const pace = 1.05 + Math.random()*0.4;
-  for(let k = 0; k < size && npcs.length < PEOPLE_MAX; k++){
+  for(let k = 0; k < size && living + k < PEOPLE_MAX && npcs.length < MAX_BODIES; k++){
     npcs.push({
       r: s.r, i: s.i, u: Math.max(0, s.u - k*1.0*dir), dir,
       side: lane + (k - (size-1)/2) * 0.72,
       speed: size > 1 ? pace : 0.95 + Math.random()*0.75,   // groups keep pace
       phase: Math.random()*6.283, h: 0.93 + Math.random()*0.17, gy: 0,
-      offended: 0, chase: false, px: 0, py: 0,
+      offended: 0, chase: false, flee: false, px: 0, py: 0,
+      hp: 1, down: false, fall: 0, deadT: 0, pool: 0.5 + Math.random()*0.35,
+      slapT: 0, swipeT: 0, sx: 0, sy: 0,
       cloth: new THREE.Color().setHSL(Math.random(), 0.20 + Math.random()*0.40,
                                       0.24 + Math.random()*0.36),
       skin:  new THREE.Color().setHSL(0.06 + Math.random()*0.03, 0.30,
@@ -1535,30 +1818,152 @@ function provoke(){
     if(d < 0.5 || d > SEEN_RANGE) continue;
     if((vx*fx + vy*fy) / d < SEEN_CONE) continue;               // must be in front of you
     if((p.hx*-vx + p.hy*-vy) / d < -0.15) continue;             // and not facing away
-    n.offended++;
-    if(n.offended >= 2 && !n.chase){
-      n.chase = true;
-      n.px = p.x; n.py = p.y;
-      n.speed = 2.3 + Math.random()*0.35;
+    takeOffence(n, p);
+  }
+}
+
+function takeOffence(n, p){
+  if(n.down) return;
+  n.offended++;
+  if(n.offended >= 2 && !n.chase){
+    p = p || npcPoint(n);
+    if(p){ n.chase = true; n.px = p.x; n.py = p.y; n.speed = 2.3 + Math.random()*0.35; }
+  }
+  colorsDirty = true;
+}
+
+/* Whoever is nearest along your sightline, within a cylinder of the given
+   radius. A slap reaches 2.5 m, a bullet 70. */
+function damageAt(range, radius, amount, maxTargets){
+  const fx = -Math.sin(player.yaw), fy = Math.cos(player.yaw), pn = -player.z;
+  const hits = [];
+  for(const n of npcs){
+    if(n.down) continue;
+    const p = npcPoint(n); if(!p) continue;
+    const vx = p.x - player.x, vy = p.y - pn;
+    const along = vx*fx + vy*fy;
+    if(along < 0.2 || along > range) continue;
+    if(Math.abs(vx*fy - vy*fx) > radius) continue;
+    hits.push({ n, along });
+  }
+  if(!hits.length) return null;
+  hits.sort((a,b) => a.along - b.along);          // nearest first
+  const k = Math.min(maxTargets || 1, hits.length);
+  for(let i = 0; i < k; i++){
+    const n = hits[i].n;
+    n.hp = Math.max(0, n.hp - amount);
+    if(n.hp === 0){ n.down = true; n.fall = 0; }
+    else takeOffence(n, null);
+  }
+  colorsDirty = true;
+  return hits[0].n;
+}
+
+/* A shot carries. Most people bolt; a few decide you are the problem and come
+   for you. Either way they turn on the spot and leave their route. */
+const GUN_HEARD = 45;
+function reactToGunshot(){
+  const pn = -player.z;
+  for(const n of npcs){
+    if(n.down || n.chase || n.flee) continue;
+    const p = npcPoint(n); if(!p) continue;
+    const d = Math.hypot(p.x - player.x, p.y - pn);
+    if(d > GUN_HEARD) continue;
+    n.px = p.x; n.py = p.y;
+    if(Math.random() < 0.7){
+      n.flee = true;  n.speed = 3.0 + Math.random()*0.9;
+    } else {
+      n.chase = true; n.speed = 2.4 + Math.random()*0.4;
+      n.offended = Math.max(n.offended, 2);
     }
     colorsDirty = true;
   }
 }
 
+function slapPlayer(n){
+  shake = Math.min(1.5, shake + 0.9);
+  hitFlash = 1;
+  n.swipeT = 0.34;
+}
+
 /* Where a person is right now, and which way they are pointed. */
 function npcPoint(n){
-  if(n.chase){
+  if(n.chase || n.flee){
     const dx = player.x - n.px, dy = (-player.z) - n.py, d = Math.hypot(dx,dy) || 1;
-    return { x:n.px, y:n.py, hx:dx/d, hy:dy/d, d };
+    const s = n.flee ? -1 : 1;                     // face the way you are going
+    return { x:n.px + n.sx, y:n.py + n.sy, hx:s*dx/d, hy:s*dy/d, d };
   }
   const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
   if(!a || !b) return null;
   const len = segLen(a,b), tx = (b.x-a.x)/len, ty = (b.y-a.y)/len;
-  return { x: a.x + tx*n.u + ty*n.side, y: a.y + ty*n.u - tx*n.side,
+  return { x: a.x + tx*n.u + ty*n.side + n.sx,
+           y: a.y + ty*n.u - tx*n.side + n.sy,
            hx: tx*n.dir, hy: ty*n.dir };
 }
 
+/* Bodies are solid: people shoulder past each other and press against you.
+   Displacement is stored as an offset from wherever their route put them, and
+   bleeds away so they drift back into their lane once the crush clears.
+   80 people is 3160 pairs a frame, which is cheaper than a spatial index. */
+const BODY_R = 0.62, PUSH_R = 0.88;
+function separate(dt){
+  const N = npcs.length;
+  const px = new Float64Array(N), py = new Float64Array(N);
+  const live = new Uint8Array(N);
+  for(let i = 0; i < N; i++){
+    const n = npcs[i];
+    if(n.down){ continue; }
+    const p = npcPoint(n);
+    if(!p) continue;
+    px[i] = p.x; py[i] = p.y; live[i] = 1;
+    const k = Math.exp(-dt*1.1);            // ease back toward their own lane
+    n.sx *= k; n.sy *= k;
+  }
+  for(let i = 0; i < N; i++){
+    if(!live[i]) continue;
+    for(let j = i+1; j < N; j++){
+      if(!live[j]) continue;
+      const dx = px[j]-px[i], dy = py[j]-py[i];
+      const d2 = dx*dx + dy*dy;
+      if(d2 > BODY_R*BODY_R || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2), push = (BODY_R - d) * 0.5;
+      const ux = dx/d, uy = dy/d;
+      npcs[i].sx -= ux*push; npcs[i].sy -= uy*push;
+      npcs[j].sx += ux*push; npcs[j].sy += uy*push;
+      px[i] -= ux*push; py[i] -= uy*push;
+      px[j] += ux*push; py[j] += uy*push;
+    }
+  }
+  // and against you — they take most of the displacement, so a crowd can pin
+  // you but leaning into it still gets you through
+  const pn = -player.z;
+  for(let i = 0; i < N; i++){
+    if(!live[i]) continue;
+    const dx = px[i] - player.x, dy = py[i] - pn;
+    const d = Math.hypot(dx, dy);
+    if(d > PUSH_R || d < 1e-4) continue;
+    const over = PUSH_R - d, ux = dx/d, uy = dy/d;
+    npcs[i].sx += ux*over*0.62; npcs[i].sy += uy*over*0.62;
+    tryMove(player.x - ux*over*0.38, player.z + uy*over*0.38);
+  }
+}
+
 const _d = new THREE.Object3D(); _d.rotation.order = 'YXZ';
+/* flat-on-the-ground variant: the geometry is already laid in XZ */
+function place2b(mesh, idx, x, y, z, sx, sz){
+  _d.position.set(x, y, z);
+  _d.rotation.set(0, 0, 0);
+  _d.scale.set(sx, 1, sz);
+  _d.updateMatrix();
+  mesh.setMatrixAt(idx, _d.matrix);
+}
+function place2(mesh, idx, x, y, z, yaw, sx, sy){
+  _d.position.set(x, y, z);
+  _d.rotation.set(0, yaw, 0);
+  _d.scale.set(sx, sy, 1);
+  _d.updateMatrix();
+  mesh.setMatrixAt(idx, _d.matrix);
+}
 function place(mesh, idx, x, y, z, pitch, yaw, sc){
   _d.position.set(x, y, z);
   _d.rotation.set(pitch, yaw, 0);
@@ -1573,15 +1978,37 @@ function updatePeople(dt){
   catch(e){ peopleErr = (e && e.stack ? e.stack : String(e)).slice(0, 300); }
 }
 function updatePeopleInner(dt){
-  if(!peopleOn){ for(const k in PARTS) PARTS[k].count = 0; return; }
+  if(!peopleOn){
+    for(const k in PARTS) PARTS[k].count = 0;
+    for(const k in BARS)  BARS[k].count = 0;
+    for(const f of FACES) f.count = 0;
+    BLOOD.count = 0;
+    return;
+  }
   if(pathsDirty) rebuildJunctions();
 
   for(let i = npcs.length-1; i >= 0; i--){
     const n = npcs[i];
-    if(n.chase){
-      const dx = player.x - n.px, dy = (-player.z) - n.py, d = Math.hypot(dx,dy);
+    if(n.down){
+      n.fall = Math.min(1, n.fall + dt*1.6);
+      n.deadT += dt;
+      const p = npcPoint(n);
+      if(!p || Math.hypot(p.x - player.x, p.y + player.z) > DESPAWN){
+        npcs.splice(i,1); colorsDirty = true;
+      }
+      continue;                                   // they stay where they fell
+    }
+    if(n.swipeT > 0) n.swipeT = Math.max(0, n.swipeT - dt);
+    if(n.chase || n.flee){
+      const dx = player.x - n.px, dy = (-player.z) - n.py, d = Math.hypot(dx,dy) || 1;
       if(d > DESPAWN){ npcs.splice(i,1); colorsDirty = true; continue; }
-      if(d > 1.4){ n.px += dx/d * n.speed * dt; n.py += dy/d * n.speed * dt; }
+      if(n.flee){
+        n.px -= dx/d * n.speed * dt; n.py -= dy/d * n.speed * dt;
+      } else {
+        if(d > 0.75){ n.px += dx/d * n.speed * dt; n.py += dy/d * n.speed * dt; }
+        n.slapT -= dt;
+        if(d < 1.9 && n.slapT <= 0){ n.slapT = 1.3 + Math.random()*0.7; slapPlayer(n); }
+      }
       continue;
     }
     const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
@@ -1605,10 +2032,15 @@ function updatePeopleInner(dt){
   if(spawnTimer <= 0 && nearSegs.length){
     // top up hard when well below strength, then trickle — otherwise the crowd
     // size would depend on how fast the machine renders
-    let budget = npcs.length < PEOPLE_MAX*0.6 ? 12 : 2;
-    while(budget-- > 0 && npcs.length < PEOPLE_MAX) spawnGroup();
+    let budget = living < PEOPLE_MAX*0.6 ? 12 : 2;
+    while(budget-- > 0 && living < PEOPLE_MAX && npcs.length < MAX_BODIES){
+      const before = npcs.length; spawnGroup();
+      living += npcs.length - before;
+    }
     spawnTimer = 0.25;
   }
+
+  separate(dt);
 
   // ground height is only needed for bridges, so amortise it across frames
   for(let k = 0; k < 6 && npcs.length; k++){
@@ -1617,6 +2049,7 @@ function updatePeopleInner(dt){
     if(p) n.gy = deckAt(p.x, -p.y);
   }
 
+  faceCount[0] = faceCount[1] = faceCount[2] = faceCount[3] = 0;
   for(let k = 0; k < npcs.length; k++){
     const n = npcs[k], p = npcPoint(n);
     if(!p) continue;
@@ -1628,17 +2061,42 @@ function updatePeopleInner(dt){
     const gy = n.gy, cy = Math.cos(yaw), sy = Math.sin(yaw);
     const ox = lx => wx + lx*h*cy, oz = lx => wz - lx*h*sy;
     // a pursuer leans in and pumps harder than a passer-by
-    const mad  = n.chase ? 1 : 0;
-    const lean = 0.05 + 0.24*mad;
+    const mad  = (n.chase || n.flee) ? 1 : 0;
+    const fall = n.fall;
+    const lean = 0.05 + 0.24*mad + 1.45*fall;      // and all the way over when down
     const legA = 0.55 + 0.24*mad, armA = 0.42 + 0.40*mad;
     const hlead = lean * 0.42 * h;
+    const drop = fall * 0.88 * h;
+    const swipe = n.swipeT > 0 ? Math.sin(Math.PI * (0.34 - n.swipeT) / 0.34) : 0;
 
-    place(PARTS.torso, k, wx, gy + 1.03*h + bob, wz, lean, yaw, h);
-    place(PARTS.head,  k, wx + p.hx*hlead, gy + 1.50*h + bob, wz - p.hy*hlead, lean*0.6, yaw, h);
-    place(PARTS.legL,  k, ox(-0.085), gy + 0.74*h + bob, oz(-0.085),  stride*legA, yaw, h);
-    place(PARTS.legR,  k, ox( 0.085), gy + 0.74*h + bob, oz( 0.085), -stride*legA, yaw, h);
-    place(PARTS.armL,  k, ox(-0.195), gy + 1.30*h + bob, oz(-0.195), -stride*armA, yaw, h);
-    place(PARTS.armR,  k, ox( 0.195), gy + 1.30*h + bob, oz( 0.195),  stride*armA, yaw, h);
+    place(PARTS.torso, k, wx, gy + 1.03*h + bob - drop, wz, lean, yaw, h);
+    place(PARTS.head,  k, wx + p.hx*hlead, gy + 1.50*h + bob - drop*1.5, wz - p.hy*hlead, lean*0.6, yaw, h);
+    place(PARTS.legL,  k, ox(-0.085), gy + 0.74*h + bob - drop*0.75, oz(-0.085),  stride*legA + fall*1.45, yaw, h);
+    place(PARTS.legR,  k, ox( 0.085), gy + 0.74*h + bob - drop*0.75, oz( 0.085), -stride*legA + fall*1.45, yaw, h);
+    place(PARTS.armL,  k, ox(-0.195), gy + 1.30*h + bob - drop*1.35, oz(-0.195), -stride*armA - fall*0.5, yaw, h);
+    place(PARTS.armR,  k, ox( 0.195), gy + 1.30*h + bob - drop*1.35, oz( 0.195),
+          stride*armA + swipe*1.9 - fall*0.5, yaw, h);
+
+    const headY = gy + 1.50*h + bob - drop*1.5;
+    const mood = faceOf(n);
+    const fwd = 0.118*h;
+    place(FACES[mood], faceCount[mood]++,
+          wx + p.hx*(hlead + fwd), headY, wz - p.hy*(hlead + fwd),
+          -lean*0.6, yaw + Math.PI, h);
+
+    const spread = n.down ? Math.min(1, n.deadT/1.6) * n.pool : 0;
+    place2b(BLOOD, k, wx, gy + 0.055, wz, spread, spread);
+
+    // health bar, billboarded on yaw so it stays upright
+    const bx = wx, by = gy + 1.50*h + bob + 0.30 - drop*1.6, bz = wz;
+    const byaw = Math.atan2(camera.position.x - bx, camera.position.z - bz);
+    const far = Math.hypot(bx - player.x, bz - player.z) > 45;
+    const vis = (n.down || far) ? 0 : 1;
+    place2(BARS.bg, k, bx, by, bz, byaw, vis, vis);
+    const lost = (1 - n.hp) * BAR_W / 2;
+    place2(BARS.fg, k, bx - Math.cos(byaw)*lost*vis, by, bz + Math.sin(byaw)*lost*vis,
+           byaw, n.hp*vis, vis);
+    BARS.fg.setColorAt(k, _barC.setHSL(0.33*n.hp, 0.85, 0.46));
 
     if(colorsDirty){
       PARTS.torso.setColorAt(k, n.cloth);
@@ -1654,6 +2112,28 @@ function updatePeopleInner(dt){
     m.count = npcs.length;
     m.instanceMatrix.needsUpdate = true;
     if(colorsDirty && m.instanceColor) m.instanceColor.needsUpdate = true;
+  }
+  for(const k in BARS){
+    BARS[k].count = npcs.length;
+    BARS[k].instanceMatrix.needsUpdate = true;
+    if(BARS[k].instanceColor) BARS[k].instanceColor.needsUpdate = true;
+  }
+  BLOOD.count = npcs.length;
+  BLOOD.instanceMatrix.needsUpdate = true;
+  for(let m = 0; m < 4; m++){
+    FACES[m].count = faceCount[m];
+    FACES[m].instanceMatrix.needsUpdate = true;
+  }
+
+  // keep the living population honest, and do not let bodies pile up forever
+  living = 0;
+  let oldest = -1, oldestT = -1;
+  for(let k = 0; k < npcs.length; k++){
+    if(!npcs[k].down) living++;
+    else if(npcs[k].deadT > oldestT){ oldestT = npcs[k].deadT; oldest = k; }
+  }
+  if(npcs.length - living > CORPSE_MAX && oldest >= 0){
+    npcs.splice(oldest, 1); colorsDirty = true;
   }
   colorsDirty = false;
 }
@@ -1706,6 +2186,16 @@ function frame(){
   const bob = player.speed ? Math.sin(player.bob)*0.035 : 0;
   camera.position.set(player.x, EYE + player.y + bob, player.z);
   camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  if(shake > 0){                                   // being hit rattles the view
+    shake = Math.max(0, shake - dt*1.9);
+    camera.rotation.x += (Math.random()-0.5) * shake * 0.10;
+    camera.rotation.z  = (Math.random()-0.5) * shake * 0.07;
+  }
+  if(hitFlash > 0){
+    hitFlash = Math.max(0, hitFlash - dt*2.4);
+    el.hit.style.opacity = (hitFlash * 0.5).toFixed(3);
+  }
+  if(keys.has(' ') && weapon) doShoot();
   animateArms(dt);
   updatePeople(dt);
   sky.position.copy(camera.position);
@@ -1726,6 +2216,10 @@ function frame(){
       : q ? `loading ${q} more block${q>1?'s':''}…`
       : `${tiles.size} blocks loaded · ${cacheHits} cached, ${netFetches} fetched`;
     updateSun();
+    el.weapon.textContent = weapon
+      ? WEAPONS[weapon].name + ' — Space fires, 1 puts it away'
+      : 'bare hands — 1 slaps, 2-5 draws';
+    el.dot.style.display = weapon ? 'block' : 'none';
     syncHash();
   }
 
@@ -1897,14 +2391,21 @@ el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checke
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 colliders, roads, bridges, MAT, TEX, go, solarPosition,
-                arms, armL, armR, ARM, npcs, PARTS, junctions,
+                arms, armL, armR, ARM, GUNS, WEAPONS, FACES, npcs, PARTS, BARS, BLOOD, junctions, npcPoint,
                 peopleDebug: () => ({ npcs:npcs.length, nearSegs:nearSegs.length,
                   roads:roads.length, walkable:roads.filter(r=>r.walk).length,
                   junctions:junctions.size, pathsDirty, peopleOn,
                   spawnTimer:+spawnTimer.toFixed(2), lastErr:peopleErr,
                   offended:npcs.filter(n=>n.offended>0).length,
                   chasing:npcs.filter(n=>n.chase).length,
-                  provoke,
+                  down:npcs.filter(n=>n.down).length,
+                  fleeing:npcs.filter(n=>n.flee).length,
+                  moods:[0,1,2,3].map(m=>npcs.filter(n=>faceOf(n)===m).length),
+                  faceDrawn:FACES.map(f=>f.count),
+                  hurt:npcs.filter(n=>n.hp<1).length,
+                  minHp:Math.min(1,...npcs.map(n=>n.hp)),
+                  weapon, shake:+shake.toFixed(2), armGun:+ARM.gun.toFixed(2),
+                  provoke, damageAt,
                   sample:(()=>{ const s=pickSpawn();
                     return s ? {d:+Math.hypot(s.r.pts[s.i].x-player.x,
                                               s.r.pts[s.i].y+player.z).toFixed(1)} : null; })() }),
