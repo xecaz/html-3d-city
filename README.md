@@ -44,7 +44,7 @@ The hash follows you as you walk, so any place you find is a shareable link.
 | mouse | look around — click once to capture the pointer, <kbd>Esc</kbd> to release |
 | <kbd>Shift</kbd> | run |
 | <kbd>[</kbd> <kbd>]</kbd> | rewind / advance the sun by 15 minutes |
-| <kbd>F</kbd> | hold to express an opinion |
+| <kbd>F</kbd> | hold to express an opinion — they notice |
 
 The search box takes a street address, a place name, or a raw `lat, lon` pair.
 
@@ -164,6 +164,14 @@ share endpoint nodes, so the junctions fall out of the data for free — 147 of
 them in one Jordaan tile), and turns on its heel at a dead end. They ride bridge
 decks like you do.
 
+They also mind being flipped off. Hold <kbd>F</kbd> where someone can see it —
+within 14 m, in front of you, and not facing away — and their face reddens. Do it
+to the same person twice and they abandon their errand and come after you,
+leaning in, pumping their arms and holding station about 1.4 m off your shoulder.
+They manage 2.3–2.65 m/s against your 6 m/s run, so you can walk into trouble but
+you can always outrun it. Offence is taken on the rising edge of the gesture, so
+holding the key does not stack.
+
 They are spawned and retired in a ring around you, drawn from a shortlist of
 nearby segments that is refreshed as you move — sampling uniformly from every
 loaded road mostly misses, because the tiles cover well over a square kilometre.
@@ -216,8 +224,9 @@ against their terms.
 - **You can walk over water.** Canals are not solid, because making them solid
   would strand you whenever a bridge is missing from the data. You float across.
 - **Interiors do not exist.** These are hollow shells with no doors.
-- **Pedestrians do not avoid anything** — not you, not each other. They follow
-  their way and walk through whatever is in the way.
+- **Pedestrians do not avoid anything** — not you, not each other, not walls.
+  They follow their way and walk through whatever is in it, and a pursuer will
+  come at you straight through a building rather than round it.
 - **Landmark heights are guessed** when OSM has none, so the odd church tower is
   the wrong size.
 - **Overpass is a shared free service** run on donated hardware. Tiles are cached

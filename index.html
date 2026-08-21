@@ -1463,6 +1463,7 @@ function spawnGroup(){
       side: lane + (k - (size-1)/2) * 0.72,
       speed: size > 1 ? pace : 0.95 + Math.random()*0.75,   // groups keep pace
       phase: Math.random()*6.283, h: 0.93 + Math.random()*0.17, gy: 0,
+      offended: 0, chase: false, px: 0, py: 0,
       cloth: new THREE.Color().setHSL(Math.random(), 0.20 + Math.random()*0.40,
                                       0.24 + Math.random()*0.36),
       skin:  new THREE.Color().setHSL(0.06 + Math.random()*0.03, 0.30,
@@ -1513,6 +1514,50 @@ function stepNPC(n, dt){
   return true;
 }
 
+/* Being flipped off, and minding it.
+   One offence reddens the face; a second and they abandon their errand and
+   come after you. They manage 2.4 m/s, so you can walk into trouble but you
+   can always outrun it. */
+const ANGRY = new THREE.Color(0xb02a1a);
+const _tmpC = new THREE.Color();
+const SEEN_RANGE = 14, SEEN_CONE = 0.55;
+let gestureWasUp = false;
+
+function provoke(){
+  const fx = -Math.sin(player.yaw), fy = Math.cos(player.yaw);   // your forward
+  const pnorth = -player.z;
+  for(const n of npcs){
+    if(n.chase) continue;
+    const p = npcPoint(n);
+    if(!p) continue;
+    const vx = p.x - player.x, vy = p.y - pnorth;
+    const d = Math.hypot(vx, vy);
+    if(d < 0.5 || d > SEEN_RANGE) continue;
+    if((vx*fx + vy*fy) / d < SEEN_CONE) continue;               // must be in front of you
+    if((p.hx*-vx + p.hy*-vy) / d < -0.15) continue;             // and not facing away
+    n.offended++;
+    if(n.offended >= 2 && !n.chase){
+      n.chase = true;
+      n.px = p.x; n.py = p.y;
+      n.speed = 2.3 + Math.random()*0.35;
+    }
+    colorsDirty = true;
+  }
+}
+
+/* Where a person is right now, and which way they are pointed. */
+function npcPoint(n){
+  if(n.chase){
+    const dx = player.x - n.px, dy = (-player.z) - n.py, d = Math.hypot(dx,dy) || 1;
+    return { x:n.px, y:n.py, hx:dx/d, hy:dy/d, d };
+  }
+  const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
+  if(!a || !b) return null;
+  const len = segLen(a,b), tx = (b.x-a.x)/len, ty = (b.y-a.y)/len;
+  return { x: a.x + tx*n.u + ty*n.side, y: a.y + ty*n.u - tx*n.side,
+           hx: tx*n.dir, hy: ty*n.dir };
+}
+
 const _d = new THREE.Object3D(); _d.rotation.order = 'YXZ';
 function place(mesh, idx, x, y, z, pitch, yaw, sc){
   _d.position.set(x, y, z);
@@ -1533,11 +1578,22 @@ function updatePeopleInner(dt){
 
   for(let i = npcs.length-1; i >= 0; i--){
     const n = npcs[i];
+    if(n.chase){
+      const dx = player.x - n.px, dy = (-player.z) - n.py, d = Math.hypot(dx,dy);
+      if(d > DESPAWN){ npcs.splice(i,1); colorsDirty = true; continue; }
+      if(d > 1.4){ n.px += dx/d * n.speed * dt; n.py += dy/d * n.speed * dt; }
+      continue;
+    }
     const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
     const gone = n.r.dead || !a || !b ||
                  Math.hypot((a.x - player.x), (a.y + player.z)) > DESPAWN;
     if(gone || !stepNPC(n, dt)){ npcs.splice(i,1); colorsDirty = true; }
   }
+  // fire once per raise of the gesture, not once per frame it is held
+  const up = armsOn && ARM.flip > 0.6;
+  if(up && !gestureWasUp) provoke();
+  gestureWasUp = up;
+
   nearAge += dt;
   // Retry while the shortlist is empty: the first frame runs before any tile
   // has loaded, and caching that empty result would stall spawning until the
@@ -1557,39 +1613,39 @@ function updatePeopleInner(dt){
   // ground height is only needed for bridges, so amortise it across frames
   for(let k = 0; k < 6 && npcs.length; k++){
     gyCursor = (gyCursor + 1) % npcs.length;
-    const n = npcs[gyCursor];
-    const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
-    if(a && b){
-      const len = segLen(a,b), tx = (b.x-a.x)/len, ty = (b.y-a.y)/len;
-      n.gy = deckAt(a.x + tx*n.u + ty*n.side, -(a.y + ty*n.u - tx*n.side));
-    }
+    const n = npcs[gyCursor], p = npcPoint(n);
+    if(p) n.gy = deckAt(p.x, -p.y);
   }
 
   for(let k = 0; k < npcs.length; k++){
-    const n = npcs[k], pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
-    const len = segLen(a,b), tx = (b.x-a.x)/len, ty = (b.y-a.y)/len;
-    const px = a.x + tx*n.u + ty*n.side;
-    const py = a.y + ty*n.u - tx*n.side;
-    const wx = px, wz = -py;
-    const hx = tx*n.dir, hy = ty*n.dir;
-    const yaw = Math.atan2(-hx, hy);
+    const n = npcs[k], p = npcPoint(n);
+    if(!p) continue;
+    const wx = p.x, wz = -p.y;
+    const yaw = Math.atan2(-p.hx, p.hy);
     n.phase += n.speed * dt * 3.4;
     const h = n.h, stride = Math.sin(n.phase);
     const bob = Math.abs(Math.cos(n.phase)) * 0.022 * h;
     const gy = n.gy, cy = Math.cos(yaw), sy = Math.sin(yaw);
     const ox = lx => wx + lx*h*cy, oz = lx => wz - lx*h*sy;
+    // a pursuer leans in and pumps harder than a passer-by
+    const mad  = n.chase ? 1 : 0;
+    const lean = 0.05 + 0.24*mad;
+    const legA = 0.55 + 0.24*mad, armA = 0.42 + 0.40*mad;
+    const hlead = lean * 0.42 * h;
 
-    place(PARTS.torso, k, wx, gy + 1.03*h + bob, wz, 0.05, yaw, h);
-    place(PARTS.head,  k, wx, gy + 1.50*h + bob, wz, 0,    yaw, h);
-    place(PARTS.legL,  k, ox(-0.085), gy + 0.74*h + bob, oz(-0.085),  stride*0.55, yaw, h);
-    place(PARTS.legR,  k, ox( 0.085), gy + 0.74*h + bob, oz( 0.085), -stride*0.55, yaw, h);
-    place(PARTS.armL,  k, ox(-0.195), gy + 1.30*h + bob, oz(-0.195), -stride*0.42, yaw, h);
-    place(PARTS.armR,  k, ox( 0.195), gy + 1.30*h + bob, oz( 0.195),  stride*0.42, yaw, h);
+    place(PARTS.torso, k, wx, gy + 1.03*h + bob, wz, lean, yaw, h);
+    place(PARTS.head,  k, wx + p.hx*hlead, gy + 1.50*h + bob, wz - p.hy*hlead, lean*0.6, yaw, h);
+    place(PARTS.legL,  k, ox(-0.085), gy + 0.74*h + bob, oz(-0.085),  stride*legA, yaw, h);
+    place(PARTS.legR,  k, ox( 0.085), gy + 0.74*h + bob, oz( 0.085), -stride*legA, yaw, h);
+    place(PARTS.armL,  k, ox(-0.195), gy + 1.30*h + bob, oz(-0.195), -stride*armA, yaw, h);
+    place(PARTS.armR,  k, ox( 0.195), gy + 1.30*h + bob, oz( 0.195),  stride*armA, yaw, h);
 
     if(colorsDirty){
       PARTS.torso.setColorAt(k, n.cloth);
       PARTS.legL.setColorAt(k, n.cloth); PARTS.legR.setColorAt(k, n.cloth);
-      PARTS.head.setColorAt(k, n.skin);
+      PARTS.head.setColorAt(k, n.offended
+        ? _tmpC.copy(n.skin).lerp(ANGRY, Math.min(0.80, 0.34*n.offended))
+        : n.skin);
       PARTS.armL.setColorAt(k, n.skin);  PARTS.armR.setColorAt(k, n.skin);
     }
   }
@@ -1846,6 +1902,9 @@ window.city = { THREE, scene, world, camera, renderer, player, tiles,
                   roads:roads.length, walkable:roads.filter(r=>r.walk).length,
                   junctions:junctions.size, pathsDirty, peopleOn,
                   spawnTimer:+spawnTimer.toFixed(2), lastErr:peopleErr,
+                  offended:npcs.filter(n=>n.offended>0).length,
+                  chasing:npcs.filter(n=>n.chase).length,
+                  provoke,
                   sample:(()=>{ const s=pickSpawn();
                     return s ? {d:+Math.hypot(s.r.pts[s.i].x-player.x,
                                               s.r.pts[s.i].y+player.z).toFixed(1)} : null; })() }),
