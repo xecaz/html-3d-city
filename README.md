@@ -63,6 +63,7 @@ The hash follows you as you walk, so any place you find is a shareable link.
 | <kbd>1</kbd> | slap, and put away whatever you were holding |
 | <kbd>2</kbd>–<kbd>5</kbd> | pistol, minigun, shotgun, AK-47 |
 | <kbd>6</kbd> <kbd>7</kbd> | grenade, molotov — hold <kbd>Space</kbd> to throw further |
+| <kbd>8</kbd> | spell book — hold <kbd>Space</kbd> and lightning falls where you look |
 | <kbd>Space</kbd> | fire |
 
 The search box takes a street address, a place name, or a raw `lat, lon` pair.
@@ -261,6 +262,16 @@ first contact instead — ground or wall — and leaves a pool that burns anyone
 standing in it at 0.55 a second for nine seconds, and sends them running. Three
 point lights are created once and re-pointed at whichever fires are nearest,
 because adding and removing lights forces every material to recompile.
+
+**The spell book.** A third firing model again: not a shot and not a throw, but
+held down. An open book with something bright between the pages, and while
+<kbd>Space</kbd> is down a bolt falls out of the sky onto whatever you are
+pointing at. The aim walks your eyeline until it meets ground or wall, then the
+bolt is drawn as twelve segments jagging down from 42 m up, re-jagged on a timer
+rather than every frame — every frame strobes. Brightest at the base, with a
+flash, a light and rolling thunder over a sustained hum. It burns anything
+within 3.2 m of where it lands and sends them running. Verified: aimed 35° down
+it struck 2.5 m ahead against 2.4 m predicted, sitting on the ground.
 
 **Faces.** Four expressions drawn to canvas — happy, level, unhappy, wretched —
 one `InstancedMesh` each, with every person written into exactly one, so all

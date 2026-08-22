@@ -114,7 +114,7 @@
     <div><kbd>[</kbd><kbd>]</kbd> rewind / advance the sun &nbsp; <kbd>F</kbd> gesture</div>
     <div><kbd>1</kbd> slap &nbsp; <kbd>2</kbd> pistol &nbsp; <kbd>3</kbd> minigun</div>
     <div><kbd>4</kbd> shotgun &nbsp; <kbd>5</kbd> AK-47</div>
-    <div><kbd>6</kbd> grenade &nbsp; <kbd>7</kbd> molotov</div>
+    <div><kbd>6</kbd> grenade &nbsp; <kbd>7</kbd> molotov &nbsp; <kbd>8</kbd> spell book</div>
     <div><kbd>Space</kbd> fire &nbsp; — hold to throw further</div>
   </div>
   <button id="back">← new location</button>
@@ -464,6 +464,10 @@ const MAT = {
   glass: new THREE.MeshLambertMaterial({ color:0x5c7b4e, emissive:0x0a120a,
                                          transparent:true, opacity:0.85 }),
   rag:   new THREE.MeshLambertMaterial({ color:0xd8cbb0, emissive:0x1a1208 }),
+  page:  new THREE.MeshLambertMaterial({ color:0xe6dcc2, emissive:0x151310 }),
+  cover: new THREE.MeshLambertMaterial({ color:0x4a2338, emissive:0x0b0508 }),
+  spell: new THREE.MeshBasicMaterial({ color:0x9ad8ff, transparent:true, opacity:0.95,
+                                       blending:THREE.AdditiveBlending, depthWrite:false }),
   wood:  new THREE.MeshLambertMaterial({ color:0x6b4423, emissive:0x0b0705 }),
   flash: new THREE.MeshBasicMaterial({ color:0xffd98a, transparent:true, opacity:0.9 }),
 };
@@ -1674,8 +1678,11 @@ const WEAPONS = [
   { name:'AK-47',   cd:0.11,  dmg:0.34, spread:0.95, shake:0.42, reach:85, tone:1.35, pen:[2,2] },
   { name:'grenade', cd:0.60,  thrown:true },
   { name:'molotov', cd:0.75,  thrown:true, fire:true },
+  // held down rather than fired: dps, not damage per shot
+  { name:'spell book', beam:true, dps:1.7, reach:55, radius:3.2 },
 ];
 const isThrown = () => !!(WEAPONS[weapon] && WEAPONS[weapon].thrown);
+const isBeam   = () => !!(WEAPONS[weapon] && WEAPONS[weapon].beam);
 const CHARGE_TIME = 1.1, THROW_DUR = 0.30;
 const FUSE = 2.3, BLAST_R = 9, MAX_NADES = 8;
 // fire spreads for a moment, burns for a while, then dies back
@@ -1801,6 +1808,30 @@ function makeBottle(){
   g.userData.wick = wick;
   return g;
 }
+/* An open book lying in the palm with something bright between the pages. */
+function makeSpellBook(){
+  const g = new THREE.Group();
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.020, 0.19), MAT.cover);
+  for(const side of [-1, 1]){
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.013, 0.175), MAT.page);
+    leaf.position.set(side*0.072, 0.004, 0);
+    leaf.rotation.z = side * -0.20;
+    g.add(leaf);
+    const cov = new THREE.Mesh(new THREE.BoxGeometry(0.122, 0.010, 0.185), MAT.cover);
+    cov.position.set(side*0.075, -0.010, 0);
+    cov.rotation.z = side * -0.20;
+    g.add(cov);
+  }
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.042, 10, 8), MAT.spell.clone());
+  core.position.set(0, 0.055, -0.02);
+  g.add(spine, core);
+  g.position.set(0, -0.082, 0.022);
+  g.rotation.x = -0.34;                       // tipped up so the pages face away
+  g.visible = false;
+  g.userData.core = core;
+  return g;
+}
+
 function makeMolotovHand(){
   const g = makeBottle();
   g.position.set(0, -0.055, 0.015);      // gripped just past the fist
@@ -1904,8 +1935,36 @@ const armL = makeArm(-1), armR = makeArm(1);
 const pistol = makeGun(), minigun = makeMinigun();
 const shotgun = makeShotgun(), ak = makeAK();
 const nadeHand = makeGrenadeHand(), molotovHand = makeMolotovHand();
-armR.hand.add(pistol, minigun, shotgun, ak, nadeHand, molotovHand);
-const GUNS = [null, pistol, minigun, shotgun, ak, nadeHand, molotovHand];
+const spellBook = makeSpellBook();
+armR.hand.add(pistol, minigun, shotgun, ak, nadeHand, molotovHand, spellBook);
+const GUNS = [null, pistol, minigun, shotgun, ak, nadeHand, molotovHand, spellBook];
+
+/* The bolt: a column of segments jagging down from the sky onto whatever you
+   are pointing at. Each segment is a cylinder spanning 0..1 along +Y, turned so
+   that axis lies down -Z, so a group can aim it with lookAt. */
+const BOLT_SEGS = 12, BOLT_H = 42;
+const SEG_GEO = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true).translate(0, 0.5, 0);
+const bolt = [];
+for(let i = 0; i < BOLT_SEGS; i++){
+  const g = new THREE.Group();
+  const core = new THREE.Mesh(SEG_GEO, MAT.spell.clone());
+  const glow = new THREE.Mesh(SEG_GEO, MAT.spell.clone());
+  core.rotation.x = glow.rotation.x = -Math.PI/2;
+  glow.material.color.setHex(0x3d7fe4);
+  g.add(core, glow);
+  g.visible = false;
+  scene.add(g);
+  bolt.push({ g, core, glow });
+}
+const boltPts = [];
+for(let i = 0; i <= BOLT_SEGS; i++) boltPts.push(new THREE.Vector3());
+
+const beamHit = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), MAT.spell.clone());
+beamHit.visible = false;
+scene.add(beamHit);
+const beamLight = new THREE.PointLight(0x8ecfff, 0, 26, 2);
+scene.add(beamLight);
+let beamOn = false, beamT = 0, boltT = 0, crackT = 0;
 const arms = new THREE.Group();
 arms.add(armL.shoulder, armR.shoulder);
 camera.add(arms);
@@ -1961,7 +2020,8 @@ function animateArms(dt){
   // the grenade borrows the gun channel, but winds back as it charges and
   // swings over on release instead of holding an aim
   let gB, gE;
-  if(isThrown()){
+  if(isBeam()){ gB = 1.24; gE = 0.52; }        // held up to read from
+  else if(isThrown()){
     if(throwT > 0){
       const th = 1 - throwT / THROW_DUR;          // 0 at release, 1 at follow-through
       gB = 2.05 - 1.55*th; gE = 1.15 - 0.60*th;
@@ -1992,14 +2052,50 @@ function animateArms(dt){
    only created on the first shot, by which point the browser has had the user
    gesture it wants. */
 let actx = null, noiseBuf = null;
-function gunshot(w){
+function audioCtx(){
   try {
     if(!actx){
       const AC = window.AudioContext || window.webkitAudioContext;
-      if(!AC) return;
+      if(!AC) return null;
       actx = new AC();
     }
     if(actx.state === 'suspended') actx.resume();
+    return actx;
+  } catch(e){ return null; }
+}
+
+/* Held down rather than struck, so the tone is started and stopped instead of
+   being fired and forgotten. */
+let beamOsc = null, beamGain = null;
+function beamSound(on){
+  try {
+    if(on && !beamOsc){
+      const ac = audioCtx(); if(!ac) return;
+      const t = ac.currentTime;
+      beamOsc = ac.createOscillator();
+      beamOsc.type = 'sawtooth';
+      beamOsc.frequency.setValueAtTime(148, t);
+      const bp = ac.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.setValueAtTime(880, t); bp.Q.value = 1.5;
+      beamGain = ac.createGain();
+      beamGain.gain.setValueAtTime(0.0001, t);
+      beamGain.gain.exponentialRampToValueAtTime(0.12, t + 0.05);
+      beamOsc.connect(bp).connect(beamGain).connect(ac.destination);
+      beamOsc.start(t);
+    } else if(!on && beamOsc){
+      const t = actx.currentTime;
+      beamGain.gain.cancelScheduledValues(t);
+      beamGain.gain.setValueAtTime(Math.max(0.0001, beamGain.gain.value), t);
+      beamGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+      beamOsc.stop(t + 0.09);
+      beamOsc = null; beamGain = null;
+    }
+  } catch(e){ beamOsc = null; beamGain = null; }
+}
+
+function gunshot(w){
+  try {
+    if(!audioCtx()) return;
     const t = actx.currentTime;
     const tone = (w && w.tone) || 1;
     if(!noiseBuf){
@@ -2242,6 +2338,83 @@ function detonate(x, y, z){
   blasts.push({ m, t: 0 });
 }
 
+const _bo = new THREE.Vector3(), _bd = new THREE.Vector3(), _bp = new THREE.Vector3();
+function updateBeam(dt){
+  const w = WEAPONS[weapon];
+  const on = beamOn && isBeam() && armsOn && ARM.gun > 0.4;
+  beamSound(on);
+  if(!on){
+    for(const b of bolt) b.g.visible = false;
+    beamHit.visible = false; beamLight.intensity = 0;
+    return;
+  }
+  beamT += dt; boltT += dt; crackT -= dt;
+
+  // where you are pointing: walk the eyeline until it meets ground or wall
+  camera.getWorldDirection(_bd);
+  _bo.copy(camera.position);
+  let sx = _bo.x + _bd.x*w.reach, sz = _bo.z + _bd.z*w.reach;
+  for(let d = 1.0; d <= w.reach; d += 0.5){
+    const x = _bo.x + _bd.x*d, y = _bo.y + _bd.y*d, z = _bo.z + _bd.z*d;
+    if(y <= groundAt(x, z) || blocked(x, z)){ sx = x; sz = z; break; }
+  }
+  const sy = groundAt(sx, sz);
+
+  // re-jag on a timer rather than every frame, or it strobes
+  if(boltT > 0.055){
+    boltT = 0;
+    for(let i = 0; i <= BOLT_SEGS; i++){
+      const t = i / BOLT_SEGS;
+      const spread = (1 - t) * 2.2 + 0.12;          // wide aloft, tight at the ground
+      boltPts[i].set(sx + (Math.random()-0.5)*spread,
+                     sy + BOLT_H * (1 - t),
+                     sz + (Math.random()-0.5)*spread);
+    }
+    boltPts[BOLT_SEGS].set(sx, sy + 0.05, sz);      // it lands where you asked
+    for(let i = 0; i < BOLT_SEGS; i++){
+      const b = bolt[i], A = boltPts[i], B = boltPts[i+1];
+      b.g.position.copy(A);
+      b.g.lookAt(B);
+      const L = A.distanceTo(B);
+      b.core.scale.set(0.085, L, 0.085);
+      b.glow.scale.set(0.26, L, 0.26);
+      b.g.visible = true;
+    }
+  }
+  const flick = 0.75 + 0.25*Math.random();
+  for(let i = 0; i < BOLT_SEGS; i++){
+    const near = 1 - i / BOLT_SEGS;                 // brightest where it lands
+    bolt[i].core.material.opacity = (0.75 + 0.25*near) * flick;
+    bolt[i].glow.material.opacity = 0.28 * flick * (0.5 + 0.5*near);
+  }
+
+  beamHit.position.set(sx, sy + 0.25, sz);
+  beamHit.scale.setScalar((0.55 + 0.2*Math.random()) * flick);
+  beamHit.material.opacity = 0.85 * flick;
+  beamHit.visible = true;
+
+  beamLight.position.set(sx, sy + 2.2, sz);
+  beamLight.intensity = 11 * flick;
+
+  // thunder on top of the hum
+  if(crackT <= 0){ crackT = 0.34 + Math.random()*0.3; gunshot({ tone: 0.6 }); }
+
+  // everything standing under it
+  const pn = -sz;
+  for(const n of npcs){
+    if(n.down) continue;
+    const p = npcPoint(n); if(!p) continue;
+    if(Math.hypot(p.x - sx, p.y - pn) > w.radius) continue;
+    n.hp = Math.max(0, n.hp - w.dps * dt);
+    if(n.hp === 0){ n.down = true; n.fall = 0; colorsDirty = true; }
+    else panic(n, p);
+  }
+  if(Math.hypot(sx - player.x, sz - player.z) < w.radius){
+    hitFlash = Math.max(hitFlash, 0.35);
+    shake = Math.max(shake, 0.3);
+  }
+}
+
 function doSlap(){
   if(slapT > 0) return;
   slapT = SLAP_CD;
@@ -2271,12 +2444,13 @@ addEventListener('keydown', e=>{
   if(e.key === '5') weapon = 4;
   if(e.key === '6') weapon = 5;
   if(e.key === '7') weapon = 6;
-  if(e.key >= '1' && e.key <= '7'){ charging = false; charge = 0; }
+  if(e.key === '8') weapon = 7;
+  if(e.key >= '1' && e.key <= '8'){ charging = false; charge = 0; }
   if(e.key === ' '){
     // a thrown weapon charges while held and goes on release; everything else
     // fires on the edge as well, so a quick tap is never missed
     if(isThrown()){ if(!charging && throwT <= 0){ charging = true; charge = 0; } }
-    else doShoot();
+    else if(!isBeam()) doShoot();          // the beam is held, not struck
   }
   if(e.key === '[' || e.key === ']'){          // scrub the sun a quarter hour
     el.live.checked = false;
@@ -3158,12 +3332,14 @@ function frame(){
     hitFlash = Math.max(0, hitFlash - dt*2.4);
     el.hit.style.opacity = (hitFlash * 0.5).toFixed(3);
   }
-  if(keys.has(' ') && weapon){
+  beamOn = keys.has(' ') && isBeam();
+  if(keys.has(' ') && weapon && !isBeam()){
     if(isThrown()){ if(charging) charge = Math.min(1, charge + dt / CHARGE_TIME); }
     else doShoot();
   }
   if(el.charge.firstChild) el.charge.firstChild.style.width = (charge*100).toFixed(0) + '%';
   animateArms(dt);
+  updateBeam(dt);
   updateGrenades(dt);
   updateFires(dt);
   updatePeople(dt);
@@ -3223,6 +3399,9 @@ function resetWorld(){
                          for(const q of f.quads) q.material.dispose(); }
   nades.length = 0; blasts.length = 0; fires.length = 0;
   charge = 0; charging = false; throwT = 0;
+  beamOn = false; beamSound(false);
+  for(const b of bolt) b.g.visible = false;
+  beamHit.visible = false; beamLight.intensity = 0;
   cacheHits = 0; netFetches = 0; backoff = 0; nextAt = 0; stalled = '';
   while(world.children.length){
     const c = world.children.pop();
@@ -3374,7 +3553,13 @@ el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checke
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 colliders, roads, bridges, MAT, TEX, go, solarPosition,
-                arms, armL, armR, ARM, GUNS, WEAPONS, nades, blasts, fires, throwGrenade, ignite,
+                arms, armL, armR, ARM, GUNS, WEAPONS, nades, blasts, fires, throwGrenade, ignite, spellBook, bolt,
+                beamState: () => ({ on:beamOn, visible:bolt[0].g.visible,
+                                    strike:beamHit.visible
+                                      ? { x:+beamHit.position.x.toFixed(1),
+                                          y:+beamHit.position.y.toFixed(1),
+                                          z:+beamHit.position.z.toFixed(1) } : null,
+                                    light:+beamLight.intensity.toFixed(1) }),
                 setCharge: v => { charge = Math.max(0, Math.min(1, v)); },
                 debugThrowMolotov: () => { weapon = 6; throwGrenade(); },
                 nadeState: () => ({ weapon, thrown:isThrown(), charging,
