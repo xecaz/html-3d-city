@@ -82,6 +82,12 @@
     padding:7px 15px;border-radius:999px;border:1px solid rgba(255,255,255,.18);
     background:rgba(13,16,20,.8);color:var(--text);cursor:pointer;font-size:12.5px}
   #back:hover{border-color:var(--accent)}
+  #say{position:absolute;left:50%;bottom:64px;transform:translateX(-50%);text-align:center;
+    font-size:17px;font-weight:600;line-height:1.5;text-shadow:0 2px 10px #000,0 0 3px #000;
+    pointer-events:none;max-width:80vw}
+  #say .me{color:#ffd9a8}
+  #say .them{color:#ff9d92}
+  #say .chat{color:#b9c4cf;font-size:14px;font-weight:500;opacity:.85}
   #attrib{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);font-size:10.5px;
     color:#7d8894;text-shadow:0 1px 6px #000}
   #attrib a{color:#9aa7b3}
@@ -108,6 +114,7 @@
   <div id="street"></div>
   <div id="coords"></div>
   <canvas id="map" width="380" height="380"></canvas>
+  <div id="say"></div>
   <div id="attrib">geometry © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors · search by Nominatim</div>
 </div>
 
@@ -169,7 +176,7 @@ const el = {
   loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
   street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
   rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), showPeople:$('#showpeople'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
-  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot')
+  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot'), say:$('#say')
 };
 
 /* ---------------------------------------------------------------- config */
@@ -833,6 +840,7 @@ const colliders = [];              // {ring, x0,x1,y0,y1, tile}
 const roads     = [];              // {name, pts, tile}
 const bridges   = [];              // {pts, hs, w, tile} — decks you can walk over
 let   pathsDirty = true;           // roads changed; the junction map needs rebuilding
+let   boatCount = 0, houseCount = 0;
 let grid = new Map();
 const CELL = 24;
 const gk = (cx,cy) => cx + ',' + cy;
@@ -864,11 +872,33 @@ function blocked(x, z){
     if(!a) continue;
     for(const i of a){
       const c = colliders[i];
+      if(c.water) continue;                      // canals are not walls
       if(px < c.x0 || px > c.x1 || py < c.y0 || py > c.y1) continue;
       if(inPoly(c.ring, px, py)) return true;
     }
   }
   return false;
+}
+
+/* Surface level of the water under a point, or null on dry land. Shares the
+   collider grid, so this is a couple of cell lookups rather than a scan. */
+function waterAt(x, y){
+  const a = grid.get(gk(Math.floor(x/CELL), Math.floor(y/CELL)));
+  if(!a) return null;
+  for(const i of a){
+    const c = colliders[i];
+    if(!c.water) continue;
+    if(x < c.x0 || x > c.x1 || y < c.y0 || y > c.y1) continue;
+    if(inPoly(c.ring, x, y)) return c.level;
+  }
+  return null;
+}
+
+/* Where a pedestrian may not go: through a wall, or across open water. A bridge
+   deck over the canal counts as ground, which is what sends them to the bridges. */
+function npcBlocked(x, y){
+  if(blocked(x, -y)) return true;
+  return waterAt(x, y) !== null && deckAt(x, -y) < -1e8;
 }
 
 /* ------------------------------------------------------------ tile loader */
@@ -977,6 +1007,200 @@ async function loadDEM(){
     demReady = true;
     demBase = sampleGrid(0, 0);          // your landing point becomes y = 0
   } catch(e){ console.warn('terrain unavailable, staying flat:', e); }
+}
+
+/* =================================================================== speech
+   The Web Speech API, so nothing has to be shipped and the browser supplies the
+   voices. Which language depends on where you are standing, which we get from
+   one reverse geocode per location.
+
+   Two country codes are traps worth naming: "ar" is Argentina, not Arabic, and
+   "sv" is El Salvador, not Sweden. Both want Spanish. */
+const LANG_BY_CC = {
+  nl:'nl-NL', be:'nl-BE', sr:'nl-NL',
+  gb:'en-GB', uk:'en-GB', ie:'en-IE', us:'en-US', ca:'en-CA', au:'en-AU',
+  nz:'en-NZ', za:'en-ZA', sg:'en-SG', mt:'en-GB',
+  de:'de-DE', at:'de-AT', ch:'de-CH', li:'de-DE', lu:'fr-FR',
+  fr:'fr-FR', mc:'fr-FR', sn:'fr-FR', ci:'fr-FR',
+  es:'es-ES', mx:'es-MX', ar:'es-AR', cl:'es-CL', co:'es-CO', pe:'es-PE',
+  uy:'es-UY', ve:'es-VE', ec:'es-EC', bo:'es-BO', py:'es-PY', cr:'es-CR',
+  cu:'es-CU', do:'es-DO', gt:'es-GT', hn:'es-HN', ni:'es-NI', pa:'es-PA',
+  sv:'es-SV',
+  pt:'pt-PT', br:'pt-BR', ao:'pt-PT', mz:'pt-PT',
+  it:'it-IT', sm:'it-IT', va:'it-IT',
+  jp:'ja-JP', cn:'zh-CN', tw:'zh-TW', hk:'zh-HK', mo:'zh-HK', kr:'ko-KR',
+  ru:'ru-RU', by:'ru-RU', kz:'ru-RU', kg:'ru-RU', ua:'uk-UA',
+  pl:'pl-PL', cz:'cs-CZ', sk:'cs-CZ', hu:'hu-HU', ro:'ro-RO', md:'ro-RO',
+  se:'sv-SE', no:'nb-NO', dk:'da-DK', fi:'fi-FI', is:'is-IS',
+  tr:'tr-TR', gr:'el-GR', cy:'el-GR',
+  th:'th-TH', id:'id-ID', my:'id-ID', vn:'vi-VN', ph:'en-US', in:'hi-IN',
+  il:'he-IL',
+  eg:'ar-EG', sa:'ar-SA', ae:'ar-AE', ma:'ar-MA', dz:'ar-DZ', tn:'ar-TN',
+  jo:'ar-JO', lb:'ar-LB', kw:'ar-KW', qa:'ar-QA', om:'ar-OM', iq:'ar-IQ',
+  ly:'ar-LY', sy:'ar-SY', ye:'ar-YE', bh:'ar-BH', ps:'ar-PS',
+};
+
+const ANGRY_LINES = {
+  en:['Oi! What is your problem?','Piss off!','Get stuffed, mate!','Watch it!'],
+  nl:['Hé, doe normaal!','Rot toch op!','Klootzak!','Wat is jouw probleem?'],
+  de:['Spinnst du?!','Verpiss dich!','Was soll das?!','Arschloch!'],
+  fr:['Non mais ça va pas ?!','Va te faire foutre !','Connard !','T’as un problème ?'],
+  es:['¡Vete a la mierda!','¡Gilipollas!','¿Qué te pasa, tío?','¡Imbécil!'],
+  pt:['Vai à merda!','Idiota!','Qual é o teu problema?','Vai-te lixar!'],
+  it:['Ma vaffanculo!','Stronzo!','Ma che cazzo vuoi?','Ma sei scemo?'],
+  ja:['ふざけるな！','何だお前！','いい加減にしろ！'],
+  zh:['你有病啊！','滚开！','你想干什么？'],
+  ko:['야, 뭐 하는 짓이야!','꺼져!','미쳤어?'],
+  ru:['Ты чего, совсем?!','Пошёл ты!','Придурок!'],
+  uk:['Ти що, здурів?!','Іди ти!','Придурок!'],
+  pl:['Odwal się!','Co ty odpierdalasz?!','Idiota!'],
+  cs:['Co blbneš?!','Jdi do hajzlu!','Idiote!'],
+  hu:['Mi a fene?!','Menj a picsába!','Idióta!'],
+  ro:['Ce faci, mă?!','Du-te dracului!','Idiotule!'],
+  sv:['Vad håller du på med?!','Dra åt helvete!','Idiot!'],
+  nb:['Hva driver du med?!','Dra til helvete!','Idiot!'],
+  da:['Hvad laver du?!','Skrid med dig!','Idiot!'],
+  fi:['Mitä helvettiä?!','Painu helvettiin!','Ääliö!'],
+  is:['Hvað ertu að gera?!','Farðu til fjandans!'],
+  tr:['Ne yapıyorsun ya?!','Defol!','Şerefsiz!'],
+  el:['Τι κάνεις ρε!','Άντε γαμήσου!','Μαλάκα!'],
+  ar:['ما هذا؟!','اغرب عن وجهي!','أحمق!'],
+  he:['מה אתה עושה?!','לך תזדיין!','אידיוט!'],
+  hi:['क्या कर रहे हो?!','भाग यहाँ से!','बेवकूफ!'],
+  th:['ทำอะไรของแก!','ไปไกลๆ เลย!'],
+  id:['Apa-apaan sih!','Pergi sana!','Dasar bodoh!'],
+  vi:['Mày làm gì thế?!','Cút đi!','Đồ ngu!'],
+};
+
+/* What you shout. English, because you are evidently a tourist. */
+const MY_LINES = ['Fuck you!','Fuck yourself!','Get a life!','Eat shit!',
+                  'Piss off!','Up yours!','Get bent!','Screw you!',
+                  'Get stuffed!','Bite me!'];
+
+/* Shouted while they are running you down. */
+const CHASE_LINES = {
+  en:['Come here!','Say that again!','I am talking to you!','Don’t you run!'],
+  nl:['Kom hier!','Zeg dat nog eens!','Blijf staan!','Ik pak je!'],
+  de:['Komm her!','Sag das nochmal!','Bleib stehen!','Ich krieg dich!'],
+  fr:['Viens ici !','Répète un peu !','Reste là !','Je vais t’avoir !'],
+  es:['¡Ven aquí!','¡Repite eso!','¡No huyas!','¡Te voy a pillar!'],
+  pt:['Vem cá!','Repete lá!','Não fujas!','Vou-te apanhar!'],
+  it:['Vieni qui!','Ripetilo!','Non scappare!','Ti prendo!'],
+  ja:['待て！','もう一回言ってみろ！','逃げるな！'],
+  zh:['你给我过来！','再说一遍！','别跑！'],
+  ko:['거기 서!','다시 말해봐!','도망가지 마!'],
+  ru:['А ну иди сюда!','Повтори!','Стой!'],
+  uk:['А ну йди сюди!','Повтори!','Стій!'],
+  pl:['Chodź tu!','Powtórz to!','Stój!'],
+  cs:['Pojď sem!','Zopakuj to!','Stůj!'],
+  hu:['Gyere ide!','Mondd még egyszer!','Állj meg!'],
+  ro:['Vino aici!','Mai zi o dată!','Stai pe loc!'],
+  sv:['Kom hit!','Säg det igen!','Stanna!'],
+  nb:['Kom hit!','Si det igjen!','Stopp!'],
+  da:['Kom her!','Sig det igen!','Stop!'],
+  fi:['Tule tänne!','Sano se uudestaan!','Seis!'],
+  is:['Komdu hingað!','Segðu það aftur!'],
+  tr:['Buraya gel!','Bir daha söyle!','Dur!'],
+  el:['Έλα εδώ!','Πες το ξανά!','Στάσου!'],
+  ar:['تعال هنا!','قلها مرة أخرى!','قف!'],
+  he:['בוא הנה!','תגיד את זה שוב!','עצור!'],
+  hi:['यहाँ आ!','फिर से बोल!','रुक जा!'],
+  th:['มานี่!','พูดอีกที!','หยุดนะ!'],
+  id:['Sini kamu!','Ulangi!','Berhenti!'],
+  vi:['Lại đây!','Nói lại xem!','Đứng lại!'],
+};
+
+/* Overheard between two people walking together. */
+const CHAT_LINES = {
+  en:['Lovely weather.','Did you see that?','I’m late already.','Long day.'],
+  nl:['Lekker weer, hè?','Zag je dat?','Ik ben al te laat.','Lange dag.'],
+  de:['Schönes Wetter heute.','Hast du das gesehen?','Ich bin spät dran.'],
+  fr:['Beau temps aujourd’hui.','T’as vu ça ?','Je suis en retard.'],
+  es:['Qué buen día.','¿Viste eso?','Voy tarde.'],
+  pt:['Está bom tempo.','Viste aquilo?','Estou atrasado.'],
+  it:['Che bella giornata.','Hai visto?','Sono in ritardo.'],
+  ja:['いい天気ですね。','見ました？','遅刻しそう。'],
+  zh:['天气不错。','你看见了吗？','我要迟到了。'],
+  ko:['날씨 좋네요.','저거 봤어요?','늦겠어요.'],
+  ru:['Хорошая погода.','Ты видел?','Я опаздываю.'],
+  uk:['Гарна погода.','Ти бачив?','Я запізнююсь.'],
+  pl:['Ładna pogoda.','Widziałeś to?','Spóźnię się.'],
+  cs:['Hezky dnes.','Viděl jsi to?','Jdu pozdě.'],
+  hu:['Szép idő van.','Láttad ezt?','Elkésem.'],
+  ro:['Frumoasă vreme.','Ai văzut?','Am întârziat.'],
+  sv:['Fint väder idag.','Såg du det?','Jag är sen.'],
+  nb:['Fint vær i dag.','Så du det?','Jeg er sen.'],
+  da:['Dejligt vejr.','Så du det?','Jeg er sent på den.'],
+  fi:['Kaunis sää.','Näitkö tuon?','Olen myöhässä.'],
+  is:['Fallegt veður.','Sástu þetta?'],
+  tr:['Hava güzel.','Onu gördün mü?','Geç kaldım.'],
+  el:['Ωραίος καιρός.','Το είδες αυτό;','Άργησα.'],
+  ar:['الجو جميل.','هل رأيت ذلك؟','تأخرت.'],
+  he:['מזג אוויר נעים.','ראית את זה?','אני מאחר.'],
+  hi:['मौसम अच्छा है।','तुमने वो देखा?','मुझे देर हो रही है।'],
+  th:['อากาศดีนะ','เห็นนั่นไหม','ฉันสายแล้ว'],
+  id:['Cuacanya bagus.','Kamu lihat itu?','Aku telat.'],
+  vi:['Thời tiết đẹp nhỉ.','Cậu thấy không?','Tớ muộn rồi.'],
+};
+
+const pick = a => a[(Math.random()*a.length)|0];
+const linesFor = table => table[localeLang.split('-')[0]] || table.en;
+
+let localeLang = 'en-GB', voices = [];
+function refreshVoices(){
+  try { voices = window.speechSynthesis ? (speechSynthesis.getVoices() || []) : []; }
+  catch(e){ voices = []; }
+}
+if(window.speechSynthesis){
+  refreshVoices();
+  speechSynthesis.addEventListener('voiceschanged', refreshVoices);
+}
+function pickVoice(lang){
+  if(!voices.length) return null;
+  const want = lang.toLowerCase(), base = want.split('-')[0];
+  return voices.find(v => (v.lang||'').replace('_','-').toLowerCase() === want)
+      || voices.find(v => (v.lang||'').toLowerCase().startsWith(base))
+      || null;
+}
+
+let sayTimer = 0, speechBusyUntil = 0;
+function subtitle(cls, text){
+  const d = document.createElement('div');
+  d.className = cls; d.textContent = text;
+  el.say.appendChild(d);
+  while(el.say.children.length > 2) el.say.removeChild(el.say.firstChild);
+  clearTimeout(sayTimer);
+  sayTimer = setTimeout(() => { el.say.textContent = ''; }, 3400);
+}
+
+/* Say it out loud and put it on screen, so it still lands if the browser has
+   no voice for that language. */
+function say(cls, text, lang, pitch, rate, prio){
+  // 2 = you and whoever answers you, 1 = a pursuer, 0 = passing chatter.
+  // Anything below top priority waits its turn rather than stacking up in the
+  // synthesiser's queue, which otherwise runs seconds behind the action.
+  const now = performance.now();
+  if((prio || 0) < 2 && now < speechBusyUntil){ SPX.blocked++; return; }
+  speechBusyUntil = now + 850 + text.length * 55;
+  subtitle(cls, text);
+  if(!window.speechSynthesis) return;
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang; u.pitch = pitch; u.rate = rate; u.volume = 1;
+    const v = pickVoice(lang); if(v) u.voice = v;
+    speechSynthesis.speak(u);
+  } catch(e){ /* speech unavailable; the subtitle carries it */ }
+}
+
+async function fetchLocale(lat, lon){
+  localeLang = 'en-GB';
+  try {
+    const r = await fetch('https://nominatim.openstreetmap.org/reverse'
+      + `?format=jsonv2&zoom=8&lat=${lat}&lon=${lon}`, { headers:{ 'Accept-Language':'en' } });
+    const j = await r.json();
+    const cc = ((j && j.address && j.address.country_code) || '').toLowerCase();
+    if(cc && LANG_BY_CC[cc]) localeLang = LANG_BY_CC[cc];
+  } catch(e){ /* stay with English */ }
 }
 
 /* ---------------------------------------------------------------- tile cache
@@ -1090,9 +1314,15 @@ function buildTile(json, gi, gj, bb){
     const r0 = rings[0];
     if(!r0 || r0.length < 3) return;
     waterRings.push(r0);
-    let cx = 0, cy = 0;
-    for(const p of r0){ cx += p.x; cy += p.y; }
+    let cx = 0, cy = 0, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for(const p of r0){
+      cx += p.x; cy += p.y;
+      if(p.x < x0) x0 = p.x; if(p.x > x1) x1 = p.x;
+      if(p.y < y0) y0 = p.y; if(p.y > y1) y1 = p.y;
+    }
     const wy = groundAt(cx/r0.length, -cy/r0.length) - 1.9;
+    colliders.push({ ring:r0, x0, x1, y0, y1, tile:key, water:true, level:wy });
+    indexCollider(colliders.length-1);
     addFlat(water, rings, wy, [1,1,1], 0.05, false);
     addSkirt(quay, rings, 0.10, wy, [0.82, 0.80, 0.76]);
   };
@@ -1117,8 +1347,24 @@ function buildTile(json, gi, gj, bb){
     }
     h = Math.max(min + 2.2, Math.min(h, 400));
     const gr = ringGround(rings[0] || []);
-    const yTop = gr.max + h;
-    const yBot = min > 0 ? gr.max + min : gr.min - 1.5;
+    // A "building" whose footprint sits on the water is a boat, not a house —
+    // Amsterdam is full of them, and extruded to four storeys they look absurd.
+    const r0 = rings[0] || [];
+    let cx = 0, cy = 0;
+    for(const p of r0){ cx += p.x; cy += p.y; }
+    const wl = r0.length ? waterAt(cx/r0.length, cy/r0.length) : null;
+    const afloat = wl !== null || tags.building === 'houseboat'
+                || tags.floating === 'yes' || tags.boat === 'yes';
+    let yTop, yBot;
+    if(afloat) boatCount++; else houseCount++;
+    if(afloat){
+      const deck = (wl !== null ? wl : gr.min - 1.9) + 0.35;
+      yTop = deck + Math.min(h, 3.2);            // one storey of cabin, no more
+      yBot = deck - 0.8;                         // and a hull sitting in the water
+    } else {
+      yTop = gr.max + h;
+      yBot = min > 0 ? gr.max + min : gr.min - 1.5;
+    }
     const r = hash(id);
     const base = new THREE.Color(PALETTE[(r*PALETTE.length)|0]);
     const shade = 0.86 + hash(id*7+3)*0.3;
@@ -1153,6 +1399,18 @@ function buildTile(json, gi, gj, bb){
       for(const o of outers) buildingFrom([o, ...inners], t, rel.id);
     } else if(t.natural === 'water'){
       for(const o of outers) addCanal([o, ...inners]);
+    }
+  }
+
+  // ---- water first, so a building standing on it can be spotted as a boat and
+  //      so pedestrians know where the canals are before they try to cross one
+  for(const w of ways.values()){
+    const t = w.tags;
+    if(!t || seen.has(w.id)) continue;
+    if(!(w.nodes.length > 3 && w.nodes[0] === w.nodes[w.nodes.length-1])) continue;
+    if(t.natural === 'water' || /^(riverbank|dock|canal)$/.test(t.waterway || '')){
+      seen.add(w.id); wayIds.add(w.id);
+      addCanal([ringOf(w.nodes, nodes)]);
     }
   }
 
@@ -1193,10 +1451,6 @@ function buildTile(json, gi, gj, bb){
                      foot: FOOT.has(t.highway), walk: WALKABLE.has(t.highway) });
         pathsDirty = true;
       }
-    }
-    else if(closed && (t.natural === 'water' || /^(riverbank|dock|canal)$/.test(t.waterway||''))){
-      seen.add(w.id); wayIds.add(w.id);
-      addCanal([ringOf(w.nodes, nodes)]);
     }
     else if(closed && (t.leisure || /^(grass|forest|meadow|village_green|recreation_ground|cemetery)$/.test(t.landuse||''))){
       seen.add(w.id); wayIds.add(w.id);
@@ -1694,6 +1948,7 @@ function drawMap(){
   }
   mg.fillStyle = 'rgba(240,160,75,.75)';
   for(const c of colliders){
+    if(c.water) continue;
     if(c.x1 < player.x-R || c.x0 > player.x+R || c.y1 < py-R || c.y0 > py+R) continue;
     mg.beginPath();
     for(let i=0;i<c.ring.length;i++){
@@ -1756,7 +2011,8 @@ const PEOPLE_MAX = 80, SPAWN_MIN = 30, SPAWN_MAX = 130, DESPAWN = 170;
 // the dead stay where they fall, so the instance pool has to hold both
 const CORPSE_MAX = 45, MAX_BODIES = PEOPLE_MAX + CORPSE_MAX;
 let living = 0;
-let peopleOn = true, colorsDirty = true, spawnTimer = 0, gyCursor = 0;
+let peopleOn = true, colorsDirty = true, spawnTimer = 0, gyCursor = 0, chatT = 3;
+const SPX = { chatTry:0, chatNear:0, chatPair:0, chatSaid:0, chaseSaid:0, blocked:0 };
 const npcs = [];
 const junctions = new Map();
 const jkey = (x,y) => Math.round(x*2) + ',' + Math.round(y*2);
@@ -1920,6 +2176,7 @@ function spawnGroup(){
       side: lane + (k - (size-1)/2) * 0.72,
       speed: size > 1 ? pace : 0.95 + Math.random()*0.75,   // groups keep pace
       phase: Math.random()*6.283, h: 0.93 + Math.random()*0.17, gy: 0,
+      pitch: 0.85 + Math.random()*0.5, sayT: Math.random()*4,
       offended: 0, chase: false, flee: false, px: 0, py: 0,
       hp: 1, down: false, fall: 0, deadT: 0, pool: 0.5 + Math.random()*0.35,
       slapT: 0, swipeT: 0, sx: 0, sy: 0,
@@ -1977,7 +2234,7 @@ function stepNPC(n, dt){
    One offence reddens the face; a second and they abandon their errand and
    come after you. They manage 2.4 m/s, so you can walk into trouble but you
    can always outrun it. */
-const ANGRY = new THREE.Color(0xb02a1a);
+const ANGRY_FACE = new THREE.Color(0xb02a1a);
 const _tmpC = new THREE.Color();
 const SEEN_RANGE = 14, SEEN_CONE = 0.55;
 let gestureWasUp = false;
@@ -1985,8 +2242,9 @@ let gestureWasUp = false;
 function provoke(){
   const fx = -Math.sin(player.yaw), fy = Math.cos(player.yaw);   // your forward
   const pnorth = -player.z;
+  let nearest = null, nd = Infinity;
   for(const n of npcs){
-    if(n.chase) continue;
+    if(n.chase || n.down) continue;
     const p = npcPoint(n);
     if(!p) continue;
     const vx = p.x - player.x, vy = p.y - pnorth;
@@ -1995,7 +2253,25 @@ function provoke(){
     if((vx*fx + vy*fy) / d < SEEN_CONE) continue;               // must be in front of you
     if((p.hx*-vx + p.hy*-vy) / d < -0.15) continue;             // and not facing away
     takeOffence(n, p);
+    if(d < nd){ nd = d; nearest = n; }
   }
+  return nearest;
+}
+
+/* You shout; whoever is closest and actually saw it answers back a beat later,
+   in the language of wherever you are standing. */
+let lastSpeech = 0;
+function flipOff(){
+  const target = provoke();
+  const now = performance.now();
+  if(now - lastSpeech < 1500) return;              // do not let them talk over each other
+  lastSpeech = now;
+  say('me', pick(MY_LINES), 'en-GB', 0.85, 1.0, 2);
+  if(!target) return;
+  const line = pick(linesFor(ANGRY_LINES));
+  setTimeout(() => {
+    if(!target.down) say('them', line, localeLang, target.pitch, 1.05, 2);
+  }, 780);
 }
 
 function takeOffence(n, p){
@@ -2003,7 +2279,8 @@ function takeOffence(n, p){
   n.offended++;
   if(n.offended >= 2 && !n.chase){
     p = p || npcPoint(n);
-    if(p){ n.chase = true; n.px = p.x; n.py = p.y; n.speed = 2.3 + Math.random()*0.35; }
+    if(p){ n.chase = true; n.px = p.x; n.py = p.y; n.speed = 2.3 + Math.random()*0.35;
+           n.sayT = 0.9; }
   }
   colorsDirty = true;
 }
@@ -2050,10 +2327,58 @@ function reactToGunshot(){
       n.flee = true;  n.speed = 3.0 + Math.random()*0.9;
     } else {
       n.chase = true; n.speed = 2.4 + Math.random()*0.4;
-      n.offended = Math.max(n.offended, 2);
+      n.offended = Math.max(n.offended, 2); n.sayT = 0.6 + Math.random();
     }
     colorsDirty = true;
   }
+}
+
+/* Chasers and runaways move off the road network, so they are the ones that
+   would otherwise cut straight through a terrace, or across a canal. Same
+   slide-along-the-wall rule the walker gets. */
+function stepFree(n, mx, my){
+  const nx = n.px + mx, ny = n.py + my;
+  if(!npcBlocked(nx, ny)){ n.px = nx; n.py = ny; return; }
+  if(!npcBlocked(nx, n.py)){ n.px = nx; return; }   // slide along whatever stopped them
+  if(!npcBlocked(n.px, ny)){ n.py = ny; }
+}
+
+/* Someone following a pavement can still be pushed into a wall by the crowd,
+   or be carrying a kerb offset that lands inside a building. Shed the shove
+   first, then narrow the offset until they are back on the street. */
+function keepOnLand(){
+  for(const n of npcs){
+    if(n.down || n.chase || n.flee) continue;
+    const p = npcPoint(n); if(!p) continue;
+    if(!npcBlocked(p.x, p.y)) continue;
+    if(Math.abs(n.sx) > 0.02 || Math.abs(n.sy) > 0.02){ n.sx *= 0.35; n.sy *= 0.35; }
+    else { n.side *= 0.7; if(Math.abs(n.side) < 0.06) n.side = 0; }
+  }
+}
+
+/* Two people walking together will say something to each other. Only near you,
+   only occasionally, and only at the lowest priority so it never talks over a
+   confrontation. */
+function chatter(){
+  SPX.chatTry++;
+  const pn = -player.z, near = [];
+  for(const n of npcs){
+    if(n.down || n.chase || n.flee) continue;
+    const p = npcPoint(n); if(!p) continue;
+    if(Math.hypot(p.x - player.x, p.y - pn) > 18) continue;
+    near.push({ n, p });
+    if(near.length >= 20) break;
+  }
+  SPX.chatNear = near.length;
+  for(let i = 0; i < near.length; i++)
+    for(let j = i+1; j < near.length; j++){
+      if(Math.hypot(near[i].p.x - near[j].p.x, near[i].p.y - near[j].p.y) > 2.6) continue;
+      SPX.chatPair++;
+      const who = (Math.random() < 0.5 ? near[i] : near[j]).n;
+      SPX.chatSaid++;
+      say('chat', pick(linesFor(CHAT_LINES)), localeLang, who.pitch, 0.98, 0);
+      return;
+    }
 }
 
 function slapPlayer(n){
@@ -2178,12 +2503,17 @@ function updatePeopleInner(dt){
     if(n.chase || n.flee){
       const dx = player.x - n.px, dy = (-player.z) - n.py, d = Math.hypot(dx,dy) || 1;
       if(d > DESPAWN){ npcs.splice(i,1); colorsDirty = true; continue; }
-      if(n.flee){
-        n.px -= dx/d * n.speed * dt; n.py -= dy/d * n.speed * dt;
-      } else {
-        if(d > 0.75){ n.px += dx/d * n.speed * dt; n.py += dy/d * n.speed * dt; }
+      const step = (n.flee ? -1 : 1) * n.speed * dt;
+      if(n.flee || d > 0.75) stepFree(n, dx/d*step, dy/d*step);
+      if(!n.flee){
         n.slapT -= dt;
         if(d < 1.9 && n.slapT <= 0){ n.slapT = 1.3 + Math.random()*0.7; slapPlayer(n); }
+        n.sayT -= dt;
+        if(d < 11 && n.sayT <= 0){                 // get in your face on the way in
+          n.sayT = 3.0 + Math.random()*3.5;
+          SPX.chaseSaid++;
+          say('them', pick(linesFor(CHASE_LINES)), localeLang, n.pitch, 1.08, 1);
+        }
       }
       continue;
     }
@@ -2194,7 +2524,7 @@ function updatePeopleInner(dt){
   }
   // fire once per raise of the gesture, not once per frame it is held
   const up = armsOn && ARM.flip > 0.6;
-  if(up && !gestureWasUp) provoke();
+  if(up && !gestureWasUp) flipOff();
   gestureWasUp = up;
 
   nearAge += dt;
@@ -2217,6 +2547,10 @@ function updatePeopleInner(dt){
   }
 
   separate(dt);
+  keepOnLand();
+
+  chatT -= dt;
+  if(chatT <= 0){ chatT = 4 + Math.random()*7; chatter(); }
 
   // ground height is only needed for bridges, so amortise it across frames
   for(let k = 0; k < 6 && npcs.length; k++){
@@ -2278,7 +2612,7 @@ function updatePeopleInner(dt){
       PARTS.torso.setColorAt(k, n.cloth);
       PARTS.legL.setColorAt(k, n.cloth); PARTS.legR.setColorAt(k, n.cloth);
       PARTS.head.setColorAt(k, n.offended
-        ? _tmpC.copy(n.skin).lerp(ANGRY, Math.min(0.80, 0.34*n.offended))
+        ? _tmpC.copy(n.skin).lerp(ANGRY_FACE, Math.min(0.80, 0.34*n.offended))
         : n.skin);
       PARTS.armL.setColorAt(k, n.skin);  PARTS.armR.setColorAt(k, n.skin);
     }
@@ -2421,6 +2755,7 @@ function resetWorld(){
   for(const k of [...tiles.keys()]) disposeTile(k);
   tiles.clear(); seen.clear(); queue.length = 0;
   colliders.length = 0; roads.length = 0; bridges.length = 0; rebuildGrid();
+  boatCount = 0; houseCount = 0;
   npcs.length = 0; junctions.clear(); pathsDirty = true; colorsDirty = true;
   cacheHits = 0; netFetches = 0; backoff = 0; nextAt = 0; stalled = '';
   while(world.children.length){
@@ -2439,6 +2774,7 @@ async function go(lat, lon, label){
   armsOn = el.showArms.checked;
   peopleOn = el.showPeople.checked;
   fetchZone(lat, lon);          // async; updates the clock when it lands
+  fetchLocale(lat, lon);        // async; decides what language they swear in
   updateSun();
   player.x = 0; player.z = 0; player.yaw = 0; player.pitch = 0;
 
@@ -2572,8 +2908,12 @@ el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checke
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 colliders, roads, bridges, MAT, TEX, go, solarPosition,
-                arms, armL, armR, ARM, GUNS, WEAPONS, FACES, npcs, groundAt,
-                dem: () => ({ ready:demReady, n:demN, base:+demBase.toFixed(2) }), PARTS, BARS, BLOOD, junctions, npcPoint,
+                arms, armL, armR, ARM, GUNS, WEAPONS, FACES, npcs, groundAt, blocked, waterAt, npcBlocked,
+                dem: () => ({ ready:demReady, n:demN, base:+demBase.toFixed(2) }),
+                speech: () => ({ lang:localeLang, voices:voices.length,
+                                 voice:(pickVoice(localeLang)||{}).name || null,
+                                 phrases:(ANGRY_LINES[localeLang.split('-')[0]]||ANGRY_LINES.en).length }),
+                say, flipOff, LANG_BY_CC, ANGRY_LINES, CHASE_LINES, CHAT_LINES, MY_LINES, PARTS, BARS, BLOOD, junctions, npcPoint,
                 peopleDebug: () => ({ npcs:npcs.length, nearSegs:nearSegs.length,
                   roads:roads.length, walkable:roads.filter(r=>r.walk).length,
                   junctions:junctions.size, pathsDirty, peopleOn,
@@ -2582,7 +2922,11 @@ window.city = { THREE, scene, world, camera, renderer, player, tiles,
                   chasing:npcs.filter(n=>n.chase).length,
                   down:npcs.filter(n=>n.down).length,
                   fleeing:npcs.filter(n=>n.flee).length,
-                  moods:[0,1,2,3].map(m=>npcs.filter(n=>faceOf(n)===m).length),
+                  moods:[0,1,2,3].map(m=>faceOf&&npcs.filter(n=>faceOf(n)===m).length),
+                  boats:boatCount, houses:houseCount, spx:SPX, chatT:+chatT.toFixed(1),
+                  onWater:npcs.filter(n=>{ if(n.down) return false;
+                    const p=npcPoint(n); return p && waterAt(p.x,p.y)!==null
+                                              && deckAt(p.x,-p.y) < -1e8; }).length,
                   faceDrawn:FACES.map(f=>f.count),
                   hurt:npcs.filter(n=>n.hp<1).length,
                   minHp:Math.min(1,...npcs.map(n=>n.hp)),

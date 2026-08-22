@@ -119,6 +119,12 @@ before being ribboned, or a long straight would cut through a rise, and bridges
 spring from the ground at each end. If the DEM cannot be fetched, `groundAt`
 returns zero everywhere and the old flat world is intact.
 
+**Boats.** A "building" whose footprint sits on the water is a houseboat, not a
+house — Amsterdam is full of them, and extruded to four storeys they look
+absurd. Water is read before buildings in each tile so the overlap can be seen,
+and anything afloat is capped to a single storey of cabin over a hull sitting in
+the water. In one Jordaan tile that is 97 boats against 2588 houses.
+
 **Canals.** Water sits 1.9 m below street level behind a stone quay wall, which is
 what actually makes a canal read as a canal rather than blue paint. That means the
 ground cannot be one big plane, or it would cover the water; instead every tile
@@ -226,6 +232,22 @@ single shot: three gave chase, two ran. The dead stay where they fall, with a
 pool spreading under them for a second and a half, until they are far behind you
 or the backlog passes forty-five.
 
+**They talk.** Speech goes through the Web Speech API, so nothing is shipped and
+the browser supplies the voices; whatever it says also appears as a subtitle, so
+it still lands when there is no voice installed for that language.
+
+Which language depends on where you are standing — one reverse geocode per
+location gives a country, and 97 of them map to a tongue. Two country codes are
+traps worth naming: `ar` is Argentina, not Arabic, and `sv` is El Salvador, not
+Sweden. Both want Spanish. There are 29 languages of phrases, in three registers:
+what they snap back when you flip them off, what they shout while running you
+down, and what two people walking together say to each other. You answer in
+English, because you are evidently a tourist.
+
+Utterances are prioritised rather than queued — you and whoever answers you come
+first, a pursuer next, passing chatter last — because the synthesiser's own queue
+runs seconds behind the action once a street gets busy.
+
 They also mind being flipped off. Hold <kbd>F</kbd> where someone can see it —
 within 14 m, in front of you, and not facing away — and their face reddens. Do it
 to the same person twice and they abandon their errand and come after you,
@@ -283,9 +305,13 @@ against their terms.
 - **You can walk over water.** Canals are not solid, because making them solid
   would strand you whenever a bridge is missing from the data. You float across.
 - **Interiors do not exist.** These are hollow shells with no doors.
-- **Pedestrians do not avoid walls.** They are solid to each other and to you —
-  a crowd can pin you and you have to lean through it — but a pursuer will still
-  come at you straight through a building rather than round it.
+- **Pedestrians keep to the pavement.** They are solid to each other and to you,
+  and they will not walk through a building or across open water — a bridge deck
+  counts as ground, which is what sends them to the bridges. If OSM forgets to
+  tag a bridge, though, they will still walk across the water there, because
+  nothing is pathfinding: they follow the ways they are given.
+- **You can still walk on water yourself.** Only the crowd is held to dry land,
+  since blocking you could strand you wherever a bridge is missing.
 - **Timers run on a clamped delta.** `dt` is capped at 0.1 s so a stall cannot
   teleport you, which means on a machine rendering below 10 fps every cooldown
   stretches proportionally.
