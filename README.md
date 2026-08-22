@@ -8,9 +8,17 @@ Enter, and a moment later you are standing on the quay in first person with the
 arrow keys under your fingers. Keep walking and the next blocks are fetched and
 built in front of you, so there is no edge of the world to bump into.
 
+The city is furnished. Real elevation, so hills are hills. Canals sunk behind
+their quay walls with houseboats floating on them, and arched bridges you walk
+over. A sun placed by actual astronomy for that latitude, longitude and moment,
+with windows that light up after it sets. Pedestrians walking the street network
+alone and in twos and threes, solid enough to shoulder past, who talk to each
+other in the language of wherever you happen to be standing — and who take it
+personally if you are rude to them.
+
 No build step, no bundler, no `node_modules`, no API keys, no account. One HTML
-file of about a thousand lines, plus a vendored copy of three.js — so the only
-thing it needs from the network at runtime is the map data itself.
+file of about three thousand lines, plus a vendored copy of three.js — so the
+only thing it needs from the network at runtime is the map data itself.
 
 ## Run it
 
@@ -50,6 +58,11 @@ The hash follows you as you walk, so any place you find is a shareable link.
 | <kbd>Space</kbd> | fire |
 
 The search box takes a street address, a place name, or a raw `lat, lon` pair.
+
+Options on the start page: detail radius (how big a tile is), shadows, whether
+your own arms are drawn, whether anyone else is about, and the hour — which
+defaults to one in the afternoon so you land in daylight. Tick **sun at local
+time now** to get the real sun for the current moment instead.
 
 ## Where the data comes from
 
