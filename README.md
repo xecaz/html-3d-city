@@ -244,6 +244,16 @@ what they snap back when you flip them off, what they shout while running you
 down, and what two people walking together say to each other. You answer in
 English, because you are evidently a tourist.
 
+Plenty of machines have no Devanagari, Thai or Hangul installed, and a subtitle
+in one of those then reads as a row of empty boxes. Speech is unaffected — a
+voice does not need a font — so the page probes at startup which scripts it can
+actually draw, by comparing each against a private-use codepoint that is
+guaranteed to have no glyph. Where a script comes out as tofu the subtitle falls
+back to a romanisation of the same line while the synthesiser still says the real
+one. All 79 non-Latin phrases carry one. Scripts your machine *can* draw are left
+alone, so installing a font (`fonts-noto` covers the lot) simply gets you the
+original text back.
+
 Utterances are prioritised rather than queued — you and whoever answers you come
 first, a pursuer next, passing chatter last — because the synthesiser's own queue
 runs seconds behind the action once a street gets busy.

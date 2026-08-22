@@ -1143,6 +1143,77 @@ const CHAT_LINES = {
   vi:['Thời tiết đẹp nhỉ.','Cậu thấy không?','Tớ muộn rồi.'],
 };
 
+/* Plenty of machines have no Devanagari, Thai or Hangul installed, and the
+   subtitle then reads as a row of empty boxes. The speech is unaffected — the
+   voice does not need a font — so when a script cannot be drawn we show a
+   romanisation of the same line and still say the real thing. */
+const ROMAN = {
+  // what they snap back
+  'ふざけるな！':'Fuzakeru na!', '何だお前！':'Nan da omae!', 'いい加減にしろ！':'Ii kagen ni shiro!',
+  '你有病啊！':'Ni you bing a!', '滚开！':'Gun kai!', '你想干什么？':'Ni xiang gan shenme?',
+  '야, 뭐 하는 짓이야!':'Ya, mwo haneun jisiya!', '꺼져!':'Kkeojyeo!', '미쳤어?':'Michyeosseo?',
+  'Ты чего, совсем?!':'Ty chego, sovsem?!', 'Пошёл ты!':'Poshyol ty!', 'Придурок!':'Pridurok!',
+  'Ти що, здурів?!':'Ty shcho, zduriv?!', 'Іди ти!':'Idy ty!',
+  'Τι κάνεις ρε!':'Ti kaneis re!', 'Άντε γαμήσου!':'Ante gamisou!', 'Μαλάκα!':'Malaka!',
+  'ما هذا؟!':'Ma hadha?!', 'اغرب عن وجهي!':'Ighrub an wajhi!', 'أحمق!':'Ahmaq!',
+  'מה אתה עושה?!':'Ma ata ose?!', 'לך תזדיין!':'Lekh tizdayen!', 'אידיוט!':'Idiot!',
+  'क्या कर रहे हो?!':'Kya kar rahe ho?!', 'भाग यहाँ से!':'Bhaag yahan se!', 'बेवकूफ!':'Bewakoof!',
+  'ทำอะไรของแก!':'Tham arai khong kae!', 'ไปไกลๆ เลย!':'Pai klai klai loei!',
+  // what they shout while chasing you
+  '待て！':'Mate!', 'もう一回言ってみろ！':'Mo ikkai itte miro!', '逃げるな！':'Nigeru na!',
+  '你给我过来！':'Ni gei wo guolai!', '再说一遍！':'Zai shuo yi bian!', '别跑！':'Bie pao!',
+  '거기 서!':'Geogi seo!', '다시 말해봐!':'Dasi malhaebwa!', '도망가지 마!':'Domanggaji ma!',
+  'А ну иди сюда!':'A nu idi syuda!', 'Повтори!':'Povtori!', 'Стой!':'Stoy!',
+  'А ну йди сюди!':'A nu ydy syudy!', 'Стій!':'Stiy!',
+  'Έλα εδώ!':'Ela edo!', 'Πες το ξανά!':'Pes to xana!', 'Στάσου!':'Stasou!',
+  'تعال هنا!':'Taal huna!', 'قلها مرة أخرى!':'Qulha marra ukhra!', 'قف!':'Qif!',
+  'בוא הנה!':'Bo hena!', 'תגיד את זה שוב!':'Tagid et ze shuv!', 'עצור!':'Atsor!',
+  'यहाँ आ!':'Yahan aa!', 'फिर से बोल!':'Phir se bol!', 'रुक जा!':'Ruk ja!',
+  'มานี่!':'Ma ni!', 'พูดอีกที!':'Phut ik thi!', 'หยุดนะ!':'Yut na!',
+  // passing chatter
+  'いい天気ですね。':'Ii tenki desu ne.', '見ました？':'Mimashita?', '遅刻しそう。':'Chikoku shiso.',
+  '天气不错。':'Tianqi bucuo.', '你看见了吗？':'Ni kanjian le ma?', '我要迟到了。':'Wo yao chidao le.',
+  '날씨 좋네요.':'Nalssi jonneyo.', '저거 봤어요?':'Jeogeo bwasseoyo?', '늦겠어요.':'Neutgesseoyo.',
+  'Хорошая погода.':'Khoroshaya pogoda.', 'Ты видел?':'Ty videl?', 'Я опаздываю.':'Ya opazdyvayu.',
+  'Гарна погода.':'Harna pohoda.', 'Ти бачив?':'Ty bachyv?', 'Я запізнююсь.':'Ya zapiznyuyus.',
+  'Ωραίος καιρός.':'Oraios kairos.', 'Το είδες αυτό;':'To eides afto?', 'Άργησα.':'Argisa.',
+  'الجو جميل.':'Al-jaw jamil.', 'هل رأيت ذلك؟':'Hal ra ayta dhalik?', 'تأخرت.':'Ta akhkhart.',
+  'מזג אוויר נעים.':'Mezeg avir naim.', 'ראית את זה?':'Raita et ze?', 'אני מאחר.':'Ani meaher.',
+  'मौसम अच्छा है।':'Mausam achha hai.', 'तुमने वो देखा?':'Tumne wo dekha?',
+  'मुझे देर हो रही है।':'Mujhe der ho rahi hai.',
+  'อากาศดีนะ':'Akat di na', 'เห็นนั่นไหม':'Hen nan mai', 'ฉันสายแล้ว':'Chan sai laeo',
+};
+
+/* Which scripts this machine can actually draw. A private-use codepoint is
+   guaranteed to have no glyph, so anything that renders identically to it is
+   coming out as tofu. */
+const SCRIPTS = [
+  ['क', /[\u0900-\u097F]/], ['ก', /[\u0E00-\u0E7F]/], ['한', /[\uAC00-\uD7AF]/],
+  ['日', /[\u3040-\u30FF\u4E00-\u9FFF]/], ['Ж', /[\u0400-\u04FF]/],
+  ['Ω', /[\u0370-\u03FF]/], ['ع', /[\u0600-\u06FF]/], ['א', /[\u0590-\u05FF]/],
+];
+let missingScripts = [];
+function probeScripts(){
+  try {
+    const draw = ch => {
+      const c = document.createElement('canvas'); c.width = 64; c.height = 48;
+      const g = c.getContext('2d');
+      g.font = '30px sans-serif'; g.fillStyle = '#fff';
+      g.fillText(ch, 4, 34);
+      return c.toDataURL();
+    };
+    const tofu = draw('\uE123');
+    missingScripts = SCRIPTS.filter(sc => draw(sc[0]) === tofu).map(sc => sc[1]);
+  } catch(e){ missingScripts = []; }
+}
+probeScripts();
+
+function readable(text){
+  for(const re of missingScripts)
+    if(re.test(text)) return ROMAN[text] || text;
+  return text;
+}
+
 const pick = a => a[(Math.random()*a.length)|0];
 const linesFor = table => table[localeLang.split('-')[0]] || table.en;
 
@@ -1182,7 +1253,7 @@ function say(cls, text, lang, pitch, rate, prio){
   const now = performance.now();
   if((prio || 0) < 2 && now < speechBusyUntil){ SPX.blocked++; return; }
   speechBusyUntil = now + 850 + text.length * 55;
-  subtitle(cls, text);
+  subtitle(cls, readable(text));
   if(!window.speechSynthesis) return;
   try {
     const u = new SpeechSynthesisUtterance(text);
@@ -2913,7 +2984,8 @@ window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 speech: () => ({ lang:localeLang, voices:voices.length,
                                  voice:(pickVoice(localeLang)||{}).name || null,
                                  phrases:(ANGRY_LINES[localeLang.split('-')[0]]||ANGRY_LINES.en).length }),
-                say, flipOff, LANG_BY_CC, ANGRY_LINES, CHASE_LINES, CHAT_LINES, MY_LINES, PARTS, BARS, BLOOD, junctions, npcPoint,
+                say, flipOff, LANG_BY_CC, ANGRY_LINES, CHASE_LINES, CHAT_LINES, MY_LINES,
+                ROMAN, readable, missing: () => missingScripts.map(String), PARTS, BARS, BLOOD, junctions, npcPoint,
                 peopleDebug: () => ({ npcs:npcs.length, nearSegs:nearSegs.length,
                   roads:roads.length, walkable:roads.filter(r=>r.walk).length,
                   junctions:junctions.size, pathsDirty, peopleOn,
