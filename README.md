@@ -20,6 +20,13 @@ No build step, no bundler, no `node_modules`, no API keys, no account. One HTML
 file of about three thousand lines, plus a vendored copy of three.js — so the
 only thing it needs from the network at runtime is the map data itself.
 
+| | |
+|---|---|
+| ![Shibuya](screenshots/shibuya-mob.webp) | ![Prinsengracht](screenshots/prinsengracht-confrontation.webp) |
+| Dōgenzaka, Shibuya — a crowd that has had enough of you | Prinsengracht, Amsterdam — *"Ik pak je!"* |
+| ![Tuinstraat](screenshots/tuinstraat-dawn.webp) | ![Le Marais](screenshots/marais-crowd.webp) |
+| Tuinstraat at 06:30, sun 2° below the horizon | Rue Elzévir, Le Marais — *"Répète un peu !"* |
+
 ## Run it
 
 ```bash
