@@ -72,6 +72,10 @@
     text-shadow:0 1px 8px #000}
   #hit{position:absolute;inset:0;pointer-events:none;opacity:0;
     background:radial-gradient(120% 90% at 50% 50%,rgba(190,25,20,0) 35%,rgba(190,25,20,.85) 100%)}
+  #charge{position:absolute;left:50%;top:calc(50% + 16px);transform:translateX(-50%);
+    width:110px;height:5px;border-radius:3px;background:rgba(0,0,0,.45);display:none;
+    box-shadow:0 0 4px #000}
+  #charge i{display:block;height:100%;width:0;border-radius:3px;background:#f0a04b}
   #dot{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;
     border-radius:50%;background:rgba(255,255,255,.75);box-shadow:0 0 3px #000;display:none}
   #map{position:absolute;right:18px;bottom:18px;width:190px;height:190px;border-radius:10px;
@@ -101,6 +105,7 @@
   <div id="sunhud"></div>
   <div id="weapon"></div>
   <div id="dot"></div>
+  <div id="charge"><i></i></div>
   <div id="hit"></div>
   <div id="keys">
     <div><kbd>↑</kbd><kbd>↓</kbd> walk &nbsp; <kbd>←</kbd><kbd>→</kbd> turn</div>
@@ -108,7 +113,9 @@
     <div><kbd>Shift</kbd> run &nbsp; <kbd>Esc</kbd> free cursor</div>
     <div><kbd>[</kbd><kbd>]</kbd> rewind / advance the sun &nbsp; <kbd>F</kbd> gesture</div>
     <div><kbd>1</kbd> slap &nbsp; <kbd>2</kbd> pistol &nbsp; <kbd>3</kbd> minigun</div>
-    <div><kbd>4</kbd> shotgun &nbsp; <kbd>5</kbd> AK-47 &nbsp; <kbd>Space</kbd> fire</div>
+    <div><kbd>4</kbd> shotgun &nbsp; <kbd>5</kbd> AK-47</div>
+    <div><kbd>6</kbd> grenade &nbsp; <kbd>7</kbd> molotov</div>
+    <div><kbd>Space</kbd> fire &nbsp; — hold to throw further</div>
   </div>
   <button id="back">← new location</button>
   <div id="street"></div>
@@ -176,7 +183,7 @@ const el = {
   loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
   street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
   rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), showPeople:$('#showpeople'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
-  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot'), say:$('#say')
+  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot'), say:$('#say'), charge:$('#charge')
 };
 
 /* ---------------------------------------------------------------- config */
@@ -453,6 +460,10 @@ const MAT = {
   // pixels already carry their own shading
   skin:  new THREE.MeshLambertMaterial({ color:0xc9a894, emissive:0x0d0908 }),
   gun:   new THREE.MeshLambertMaterial({ color:0x2e3238, emissive:0x090a0c }),
+  nade:  new THREE.MeshLambertMaterial({ color:0x3f4a34, emissive:0x090b07 }),
+  glass: new THREE.MeshLambertMaterial({ color:0x5c7b4e, emissive:0x0a120a,
+                                         transparent:true, opacity:0.85 }),
+  rag:   new THREE.MeshLambertMaterial({ color:0xd8cbb0, emissive:0x1a1208 }),
   wood:  new THREE.MeshLambertMaterial({ color:0x6b4423, emissive:0x0b0705 }),
   flash: new THREE.MeshBasicMaterial({ color:0xffd98a, transparent:true, opacity:0.9 }),
 };
@@ -1650,7 +1661,7 @@ scene.add(ground);
    bob so they keep step with whatever pace you are actually moving at. They
    slide down out of frame when you stand still and swing harder when you run. */
 let armsOn = true;
-const ARM = { lift:0, run:0, flip:0, gun:0, slap:0 };
+const ARM = { lift:0, run:0, flip:0, gun:0, slap:0, chg:0 };
 /* Weapons. Slapping puts the gun away again, which is what restores the
    two-handed version of the gesture. */
 let weapon = 0, slapT = 0, shootT = 0, shake = 0, hitFlash = 0;
@@ -1661,7 +1672,16 @@ const WEAPONS = [
   { name:'minigun', cd:0.075, dmg:0.50, spread:1.15, shake:0.30, reach:90, tone:2.10, pen:[2,3] },
   { name:'shotgun', cd:0.85,  dmg:0.55, spread:2.20, shake:0.90, reach:26, tone:0.62, pen:[1,2] },
   { name:'AK-47',   cd:0.11,  dmg:0.34, spread:0.95, shake:0.42, reach:85, tone:1.35, pen:[2,2] },
+  { name:'grenade', cd:0.60,  thrown:true },
+  { name:'molotov', cd:0.75,  thrown:true, fire:true },
 ];
+const isThrown = () => !!(WEAPONS[weapon] && WEAPONS[weapon].thrown);
+const CHARGE_TIME = 1.1, THROW_DUR = 0.30;
+const FUSE = 2.3, BLAST_R = 9, MAX_NADES = 8;
+// fire spreads for a moment, burns for a while, then dies back
+const FIRE_R = 3.8, FIRE_LIFE = 9, FIRE_DPS = 0.55, MAX_FIRES = 6;
+let charge = 0, charging = false, throwT = 0;
+const nades = [], blasts = [], fires = [];
 const SLAP_DUR = 0.42, SLAP_CD = 0.5;
 let flashT = 0;
 const GUN_BASE = 1.05, GUN_BEND = 0.45;    // sum ~1.5 rad: hand points down-range
@@ -1725,6 +1745,83 @@ function makeArm(side){
   shoulder.rotation.z = side * 0.20;
   return { shoulder, elbow, hand, side };
 }
+const NADE_GEO = new THREE.SphereGeometry(0.055, 8, 6);
+const BOTTLE_GEO = new THREE.CylinderGeometry(0.036, 0.042, 0.17, 8);
+const NECK_GEO = new THREE.CylinderGeometry(0.017, 0.030, 0.06, 8);
+
+function flameTexture(){
+  const S = 96, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(S/2, S*0.74, 1, S/2, S*0.66, S*0.44);
+  grd.addColorStop(0,   'rgba(255,255,238,1)');     // white at the heart
+  grd.addColorStop(0.22,'rgba(255,222,120,0.98)');
+  grd.addColorStop(0.50,'rgba(255,140,38,0.75)');
+  grd.addColorStop(0.80,'rgba(196,58,10,0.26)');
+  grd.addColorStop(1,   'rgba(90,20,0,0)');
+  g.fillStyle = grd;
+  g.beginPath();                                     // a teardrop, tip upward
+  g.moveTo(S/2, S*0.03);
+  g.bezierCurveTo(S*0.84, S*0.40, S*0.92, S*0.82, S/2, S*0.98);
+  g.bezierCurveTo(S*0.08, S*0.82, S*0.16, S*0.40, S/2, S*0.03);
+  g.closePath();
+  g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/* A small pool of lights, created once and re-pointed at whichever fires are
+   nearest. Adding and removing lights would force every material to recompile,
+   which is a visible stutter; moving three of them costs nothing. */
+const FIRE_LIGHTS = [];
+for(let i = 0; i < 3; i++){
+  const l = new THREE.PointLight(0xff7d2a, 0, 16, 2);
+  scene.add(l);
+  FIRE_LIGHTS.push(l);
+}
+let FLAME_TEX = null;
+const flameMat = () => new THREE.MeshBasicMaterial({
+  map: FLAME_TEX || (FLAME_TEX = flameTexture()), transparent:true,
+  blending: THREE.AdditiveBlending, depthWrite:false });
+
+/* A bottle with a lit rag. The flame is its own little emissive blob so it
+   reads at night, when a molotov is most of the point. */
+/* Built pointing along -Y, which is the direction away from the wrist, so the
+   neck and the lit rag lead rather than jabbing back up your own forearm. */
+function makeBottle(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(BOTTLE_GEO, MAT.glass);
+  const neck = new THREE.Mesh(NECK_GEO, MAT.glass);
+  neck.position.y = -0.113;
+  const rag = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.05, 0.018), MAT.rag);
+  rag.position.y = -0.162; rag.rotation.z = 0.22;
+  const wick = new THREE.Mesh(new THREE.SphereGeometry(0.038, 6, 5), flameMat());
+  wick.position.y = -0.205; wick.scale.set(0.8, 1.6, 0.8);
+  g.add(body, neck, rag, wick);
+  g.userData.wick = wick;
+  return g;
+}
+function makeMolotovHand(){
+  const g = makeBottle();
+  g.position.set(0, -0.055, 0.015);      // gripped just past the fist
+  g.rotation.z = 0.20;
+  g.visible = false;
+  return g;
+}
+function makeGrenadeHand(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(NADE_GEO, MAT.nade);
+  body.position.set(0, -0.095, 0.012);
+  body.scale.set(1, 1.18, 1);
+  const lever = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.058, 0.010), MAT.gun);
+  lever.position.set(0.046, -0.088, 0.012);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.017, 0.005, 5, 10), MAT.gun);
+  ring.position.set(-0.032, -0.052, 0.02); ring.rotation.y = Math.PI/2;
+  g.add(body, lever, ring);
+  g.visible = false;
+  return g;
+}
+
 function makeShotgun(){
   const g = new THREE.Group();
   for(const dx of [-0.017, 0.017]){
@@ -1806,8 +1903,9 @@ function makeGun(){
 const armL = makeArm(-1), armR = makeArm(1);
 const pistol = makeGun(), minigun = makeMinigun();
 const shotgun = makeShotgun(), ak = makeAK();
-armR.hand.add(pistol, minigun, shotgun, ak);
-const GUNS = [null, pistol, minigun, shotgun, ak];
+const nadeHand = makeGrenadeHand(), molotovHand = makeMolotovHand();
+armR.hand.add(pistol, minigun, shotgun, ak, nadeHand, molotovHand);
+const GUNS = [null, pistol, minigun, shotgun, ak, nadeHand, molotovHand];
 const arms = new THREE.Group();
 arms.add(armL.shoulder, armR.shoulder);
 camera.add(arms);
@@ -1815,12 +1913,13 @@ scene.add(camera);      // a camera's children only update once it is in the gra
 
 /* One arm's pose, blended between four states: walking, making the gesture,
    holding the gun, and mid-slap. */
-function poseArm(a, f, g, sl, swing, sgn){
+function poseArm(a, f, g, sl, swing, sgn, gBase, gBend){
   const rest = Math.max(0, 1 - g - sl);
   const amp  = (0.14 + 0.10*ARM.run) * (1 - 0.55*f) * rest;
   let base = 1.25*(1-f) + FLIP_BASE*f;
   let bend = (1.20 + 0.25*ARM.run)*(1-f) + FLIP_BEND*f;
-  base = base*(1-g) + GUN_BASE*g;   bend = bend*(1-g) + GUN_BEND*g;
+  base = base*(1-g) + (gBase === undefined ? GUN_BASE : gBase)*g;
+  bend = bend*(1-g) + (gBend === undefined ? GUN_BEND : gBend)*g;
   base = base*(1-sl) + SLAP_BASE*sl; bend = bend*(1-sl) + SLAP_BEND*sl;
   a.shoulder.rotation.x = base + sgn*swing*amp;
   a.elbow.rotation.x    = bend + sgn*swing*0.35*(1 - 0.55*f)*rest;
@@ -1852,19 +1951,35 @@ function animateArms(dt){
   ARM.run  += (runAmt - ARM.run) * Math.min(1, dt*4);
   ARM.flip += (rude - ARM.flip)  * Math.min(1, dt*11);
   ARM.gun  += ((weapon ? 1 : 0) - ARM.gun) * Math.min(1, dt*9);
+  ARM.chg  += (charge - ARM.chg) * Math.min(1, dt*12);
   ARM.slap  = sl;
+  throwT = Math.max(0, throwT - dt);
 
   const swing = Math.sin(player.bob);
   // the hand holding the gun cannot also make the gesture, so only the free
   // one does — one finger instead of two
+  // the grenade borrows the gun channel, but winds back as it charges and
+  // swings over on release instead of holding an aim
+  let gB, gE;
+  if(isThrown()){
+    if(throwT > 0){
+      const th = 1 - throwT / THROW_DUR;          // 0 at release, 1 at follow-through
+      gB = 2.05 - 1.55*th; gE = 1.15 - 0.60*th;
+    } else {
+      gB = 1.30 + 0.78*ARM.chg;
+      gE = 1.00 + 0.30*ARM.chg;
+    }
+  }
   poseArm(armL, ARM.flip,                 0,       0,  swing,  1);
-  poseArm(armR, ARM.flip * (1 - ARM.gun), ARM.gun, sl, swing, -1);
+  poseArm(armR, ARM.flip * (1 - ARM.gun), ARM.gun, sl, swing, -1, gB, gE);
 
   const held = GUNS[weapon];
   const shown = ARM.gun > 0.02;
   for(let i = 1; i < GUNS.length; i++) GUNS[i].visible = (i === weapon) && shown;
+  // whatever is thrown has left your hand mid-swing
+  if(throwT > 0){ nadeHand.visible = false; molotovHand.visible = false; }
   if(held){
-    held.userData.flash.visible = flashT > 0;
+    if(held.userData.flash) held.userData.flash.visible = flashT > 0;
     // barrels idle slowly and wind up while the trigger is down
     if(held.userData.spin) held.userData.spin.rotation.y += dt * (shootT > 0 ? 30 : 5);
   }
@@ -1914,10 +2029,223 @@ function gunshot(w){
   } catch(e){ /* no audio device, or blocked — the gun still works */ }
 }
 
+/* ---------------------------------------------------------------- grenades
+   Held on Space and thrown on release: the longer the hold, the harder the
+   throw. It leaves along your eyeline, so looking up throws further. */
+const _dir = new THREE.Vector3();
+function throwGrenade(){
+  if(nades.length >= MAX_NADES) return;
+  const w = WEAPONS[weapon];
+  const fire = !!(w && w.fire);
+  camera.getWorldDirection(_dir);
+  _dir.y += 0.14;                        // a flat throw should still arc
+  _dir.normalize();
+  const m = fire ? makeBottle() : new THREE.Mesh(NADE_GEO, MAT.nade);
+  if(fire) m.scale.setScalar(0.85);
+  m.position.copy(camera.position).addScaledVector(_dir, 0.5);
+  m.castShadow = !fire;
+  scene.add(m);
+  // a bottle breaks where it lands; a grenade cooks off wherever it happens to be
+  nades.push({ m, v: _dir.clone().multiplyScalar(9 + charge * 19),
+               fuse: fire ? 8 : FUSE, fire, spin: fire ? 7 + Math.random()*4 : 0 });
+  throwT = THROW_DUR;
+  charge = 0;
+}
+
+function updateGrenades(dt){
+  for(let i = nades.length - 1; i >= 0; i--){
+    const g = nades[i], p = g.m.position;
+    g.v.y -= 9.81 * dt;
+    const nx = p.x + g.v.x*dt, ny = p.y + g.v.y*dt, nz = p.z + g.v.z*dt;
+    const floor = groundAt(nx, nz) + 0.06;
+    if(g.spin) g.m.rotation.z += g.spin * dt;
+    if(ny <= floor){
+      if(g.fire){                                      // glass does not bounce
+        ignite(nx, floor, nz);
+        scene.remove(g.m); nades.splice(i, 1); continue;
+      }
+      p.set(nx, floor, nz);                            // land and bounce
+      g.v.y *= -0.30; g.v.x *= 0.60; g.v.z *= 0.60;
+      if(Math.abs(g.v.y) < 0.6) g.v.y = 0;
+    } else if(blocked(nx, nz)){
+      if(g.fire){
+        // Break on first contact, whatever it hit, and burn at the foot of it.
+        // This used to also require the previous position to be clear, so a
+        // bottle that started near a wall — or got inside one — never triggered
+        // and sailed straight through the building.
+        ignite(p.x, groundAt(p.x, p.z), p.z);
+        scene.remove(g.m); nades.splice(i, 1); continue;
+      }
+      if(!blocked(p.x, p.z)){
+        g.v.x *= -0.45; g.v.z *= -0.45;                // ricochet off a wall
+        p.y = ny;
+      } else {
+        p.set(nx, ny, nz);                             // already inside: let it out
+      }
+    } else {
+      p.set(nx, ny, nz);
+    }
+    g.fuse -= dt;
+    if(g.fuse <= 0){
+      detonate(p.x, p.y, p.z);
+      scene.remove(g.m);
+      nades.splice(i, 1);
+    }
+  }
+  for(let i = blasts.length - 1; i >= 0; i--){
+    const b = blasts[i];
+    b.t += dt;
+    const k = b.t / 0.45;
+    b.m.scale.setScalar(0.4 + k * BLAST_R * 0.8);
+    b.m.material.opacity = Math.max(0, 0.85 * (1 - k));
+    if(k >= 1){ scene.remove(b.m); b.m.material.dispose(); blasts.splice(i, 1); }
+  }
+}
+
+/* A pool of fire: a disc on the ground and a handful of billboarded flames
+   that flicker. It spreads for half a second, burns, then dies back. */
+function ignite(x, y, z){
+  gunshot({ tone: 1.7 });                              // glass, not a bang
+  if(fires.length >= MAX_FIRES){
+    const old = fires.shift();
+    scene.remove(old.g);
+    old.disc.material.dispose();
+    for(const q of old.quads) q.material.dispose();
+  }
+  // The group stays at the origin and everything inside is placed in world
+  // coordinates. Translating the group as well would offset the flames from
+  // their own embers by exactly the fire's position.
+  const g = new THREE.Group();
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 24).rotateX(-Math.PI/2),
+    new THREE.MeshBasicMaterial({ color:0xc23a08, transparent:true, opacity:0.42,
+                                  depthWrite:false, blending:THREE.AdditiveBlending }));
+  disc.position.set(x, y + 0.05, z);
+  g.add(disc);
+  const quads = [];
+  for(let k = 0; k < 15; k++){
+    const q = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.75), flameMat());
+    const a = Math.random()*Math.PI*2, r = Math.sqrt(Math.random());
+    q.userData = { ox: Math.cos(a)*r, oz: Math.sin(a)*r, ph: Math.random()*6.28,
+                   sc: 0.55 + Math.random()*0.7,
+                   life: Math.random(), rate: 0.85 + Math.random()*0.9 };
+    g.add(q); quads.push(q);
+  }
+  scene.add(g);
+  fires.push({ g, disc, quads, x, y, z, t: 0 });
+}
+
+function updateFires(dt){
+  for(const l of FIRE_LIGHTS) l.intensity = 0;
+  const lit = [];
+
+  for(let i = fires.length - 1; i >= 0; i--){
+    const f = fires[i];
+    f.t += dt;
+    const k = f.t / FIRE_LIFE;
+    if(k >= 1){
+      scene.remove(f.g);
+      f.disc.material.dispose();
+      for(const q of f.quads) q.material.dispose();
+      fires.splice(i, 1);
+      continue;
+    }
+    const grow = Math.min(1, f.t / 0.6);
+    const fade = k > 0.72 ? (1 - k) / 0.28 : 1;
+    const R = FIRE_R * grow;
+
+    const pulse = 0.82 + 0.18*Math.sin(f.t*11) + 0.08*Math.sin(f.t*23 + 1.7);
+    f.disc.scale.setScalar(R);
+    f.disc.material.opacity = 0.42 * fade * pulse;
+
+    const yaw = Math.atan2(camera.position.x - f.x, camera.position.z - f.z);
+    for(const q of f.quads){
+      const u = q.userData;
+      u.life += u.rate * dt;
+      if(u.life >= 1){                                 // a tongue dies, another starts
+        u.life -= 1;
+        const a = Math.random()*Math.PI*2, r = Math.sqrt(Math.random());
+        u.ox = Math.cos(a)*r; u.oz = Math.sin(a)*r;
+        u.sc = 0.55 + Math.random()*0.7;
+      }
+      const rise = u.life;                             // 0 at the base, 1 at the top
+      const wob = Math.sin(f.t*7 + u.ph);
+      const sc = u.sc * (1 - rise*0.45) * grow;
+      q.position.set(f.x + u.ox*R*0.72 + wob*0.05*rise,
+                     f.y + 0.16 + rise*1.05,
+                     f.z + u.oz*R*0.72);
+      q.rotation.set(0, yaw, wob*0.16*rise);
+      q.scale.set(sc*0.95, sc*1.25, 1);
+      q.material.opacity = fade * (1 - rise*rise);
+      // white-hot at the base, deep orange by the time it lets go
+      q.material.color.setHSL(0.105 - 0.055*rise, 1, 0.66 - 0.20*rise);
+    }
+
+    lit.push(f);
+
+    // anything standing in it burns
+    for(const n of npcs){
+      if(n.down) continue;
+      const p = npcPoint(n); if(!p) continue;
+      if(Math.hypot(p.x - f.x, p.y + f.z) > R) continue;
+      n.hp = Math.max(0, n.hp - FIRE_DPS * dt);
+      if(n.hp === 0){ n.down = true; n.fall = 0; colorsDirty = true; }
+      else panic(n, p);
+    }
+    if(Math.hypot(f.x - player.x, f.z - player.z) < R){
+      hitFlash = Math.max(hitFlash, 0.30);
+      shake = Math.max(shake, 0.25);
+    }
+  }
+
+  // hand the three lights to the three nearest fires, flickering
+  lit.sort((a, b) => Math.hypot(a.x-player.x, a.z-player.z)
+                   - Math.hypot(b.x-player.x, b.z-player.z));
+  for(let i = 0; i < FIRE_LIGHTS.length && i < lit.length; i++){
+    const f = lit[i], l = FIRE_LIGHTS[i];
+    const kk = f.t / FIRE_LIFE;
+    const fade = kk > 0.72 ? (1 - kk) / 0.28 : 1;
+    l.position.set(f.x, f.y + 1.0, f.z);
+    l.intensity = (5.5 + 1.8*Math.sin(f.t*13) + 1.1*Math.sin(f.t*29 + 2.1))
+                * fade * Math.min(1, f.t/0.5);
+  }
+}
+
+function detonate(x, y, z){
+  gunshot({ tone: 0.42 });                            // same synth, dropped an octave
+  const pn = -z;
+  for(const n of npcs){
+    if(n.down) continue;
+    const p = npcPoint(n); if(!p) continue;
+    const d = Math.hypot(p.x - x, p.y - pn);
+    if(d > BLAST_R) continue;
+    const f = 1 - d / BLAST_R;                        // nearer hurts more
+    n.hp = Math.max(0, n.hp - (0.30 + f * 1.15));
+    if(n.hp === 0){ n.down = true; n.fall = 0; }
+    else takeOffence(n, p);
+  }
+  colorsDirty = true;
+  reactToGunshot();
+
+  const dp = Math.hypot(x - player.x, z - player.z);
+  if(dp < BLAST_R){                                   // you are not immune to the noise
+    const f = 1 - dp / BLAST_R;
+    shake = Math.min(2.2, shake + 1.7 * f);
+    hitFlash = Math.max(hitFlash, 0.75 * f);
+  }
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10),
+    new THREE.MeshBasicMaterial({ color:0xffc061, transparent:true,
+                                  opacity:0.85, depthWrite:false }));
+  m.position.set(x, y, z);
+  m.scale.setScalar(0.4);
+  scene.add(m);
+  blasts.push({ m, t: 0 });
+}
+
 function doSlap(){
   if(slapT > 0) return;
   slapT = SLAP_CD;
-  weapon = 0;                       // a hand in use is a gun put away
+  weapon = 0; charging = false; charge = 0;                       // a hand in use is a gun put away
   damageAt(2.5, 1.0, 0.12);
 }
 function doShoot(){
@@ -1941,7 +2269,15 @@ addEventListener('keydown', e=>{
   if(e.key === '3') weapon = 2;
   if(e.key === '4') weapon = 3;
   if(e.key === '5') weapon = 4;
-  if(e.key === ' ') doShoot();     // edge too, so a quick tap is never missed
+  if(e.key === '6') weapon = 5;
+  if(e.key === '7') weapon = 6;
+  if(e.key >= '1' && e.key <= '7'){ charging = false; charge = 0; }
+  if(e.key === ' '){
+    // a thrown weapon charges while held and goes on release; everything else
+    // fires on the edge as well, so a quick tap is never missed
+    if(isThrown()){ if(!charging && throwT <= 0){ charging = true; charge = 0; } }
+    else doShoot();
+  }
   if(e.key === '[' || e.key === ']'){          // scrub the sun a quarter hour
     el.live.checked = false;
     let h = parseFloat(el.hour.value) + (e.key === ']' ? 0.25 : -0.25);
@@ -1952,6 +2288,7 @@ addEventListener('keydown', e=>{
 addEventListener('keyup', e=>{
   keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key);
   if(e.key === 'Shift') running = false;
+  if(e.key === ' ' && charging){ charging = false; if(isThrown()) throwGrenade(); }
 });
 addEventListener('blur', ()=>{ keys.clear(); running = false; });
 
@@ -2476,6 +2813,17 @@ function chatter(){
     }
 }
 
+/* Drop everything and run. Fleeing is expressed as running from you, which is
+   near enough when you are the one who threw the bottle. */
+function panic(n, p){
+  if(n.flee || n.down) return;
+  n.chase = false; n.flee = true;
+  n.px = p.x; n.py = p.y;
+  n.sx = 0; n.sy = 0;
+  n.speed = 3.2 + Math.random()*0.8;
+  colorsDirty = true;
+}
+
 function slapPlayer(n){
   shake = Math.min(1.5, shake + 0.9);
   hitFlash = 1;
@@ -2810,8 +3158,14 @@ function frame(){
     hitFlash = Math.max(0, hitFlash - dt*2.4);
     el.hit.style.opacity = (hitFlash * 0.5).toFixed(3);
   }
-  if(keys.has(' ') && weapon) doShoot();
+  if(keys.has(' ') && weapon){
+    if(isThrown()){ if(charging) charge = Math.min(1, charge + dt / CHARGE_TIME); }
+    else doShoot();
+  }
+  if(el.charge.firstChild) el.charge.firstChild.style.width = (charge*100).toFixed(0) + '%';
   animateArms(dt);
+  updateGrenades(dt);
+  updateFires(dt);
   updatePeople(dt);
   sky.position.copy(camera.position);
   ground.position.set(Math.round(player.x/500)*500,
@@ -2837,6 +3191,7 @@ function frame(){
       ? WEAPONS[weapon].name + ' — Space fires, 1 puts it away'
       : 'bare hands — 1 slaps, 2-5 draws';
     el.dot.style.display = weapon ? 'block' : 'none';
+    el.charge.style.display = isThrown() ? 'block' : 'none';
     syncHash();
   }
 
@@ -2862,6 +3217,12 @@ function resetWorld(){
   colliders.length = 0; roads.length = 0; bridges.length = 0; rebuildGrid();
   boatCount = 0; houseCount = 0;
   npcs.length = 0; junctions.clear(); pathsDirty = true; colorsDirty = true;
+  for(const g of nades) scene.remove(g.m);
+  for(const b of blasts){ scene.remove(b.m); b.m.material.dispose(); }
+  for(const f of fires){ scene.remove(f.g); f.disc.material.dispose();
+                         for(const q of f.quads) q.material.dispose(); }
+  nades.length = 0; blasts.length = 0; fires.length = 0;
+  charge = 0; charging = false; throwT = 0;
   cacheHits = 0; netFetches = 0; backoff = 0; nextAt = 0; stalled = '';
   while(world.children.length){
     const c = world.children.pop();
@@ -3013,7 +3374,14 @@ el.sh.addEventListener('change', ()=>{ renderer.shadowMap.enabled = el.sh.checke
 /* One handle on the innards, for poking at it from the console. */
 window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 colliders, roads, bridges, MAT, TEX, go, solarPosition,
-                arms, armL, armR, ARM, GUNS, WEAPONS, FACES, npcs, groundAt, blocked, waterAt, npcBlocked,
+                arms, armL, armR, ARM, GUNS, WEAPONS, nades, blasts, fires, throwGrenade, ignite,
+                setCharge: v => { charge = Math.max(0, Math.min(1, v)); },
+                debugThrowMolotov: () => { weapon = 6; throwGrenade(); },
+                nadeState: () => ({ weapon, thrown:isThrown(), charging,
+                                    charge:+charge.toFixed(2), live:nades.length,
+                                    blasts:blasts.length, fires:fires.length,
+                                    throwT:+throwT.toFixed(2),
+                                    name:(WEAPONS[weapon]||{}).name || 'hands' }), FACES, npcs, groundAt, blocked, waterAt, npcBlocked,
                 dem: () => ({ ready:demReady, n:demN, base:+demBase.toFixed(2) }),
                 speech: () => ({ lang:localeLang, voices:voices.length,
                                  voice:(pickVoice(localeLang)||{}).name || null,

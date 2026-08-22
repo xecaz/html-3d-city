@@ -62,6 +62,7 @@ The hash follows you as you walk, so any place you find is a shareable link.
 | <kbd>F</kbd> | hold to express an opinion — they notice |
 | <kbd>1</kbd> | slap, and put away whatever you were holding |
 | <kbd>2</kbd>–<kbd>5</kbd> | pistol, minigun, shotgun, AK-47 |
+| <kbd>6</kbd> <kbd>7</kbd> | grenade, molotov — hold <kbd>Space</kbd> to throw further |
 | <kbd>Space</kbd> | fire |
 
 The search box takes a street address, a place name, or a raw `lat, lon` pair.
@@ -247,6 +248,19 @@ stays one document; each weapon just shifts the filter sweep and envelope.
 A round carries through the nearest N people along the sightline, N rolled per
 shot from the weapon's range. The minigun's six barrels idle slowly and wind up
 while the trigger is down.
+
+**Thrown.** <kbd>6</kbd> and <kbd>7</kbd> are charged rather than fired: hold
+<kbd>Space</kbd> to wind up and release to throw, and the arm draws back as it
+charges. A tap lobs about 9 m, a full second and a bit reaches 36 m, measured
+9.1 / 15.3 / 20.4 / 27.7 / 35.7 m across the charge range. It leaves along your
+eyeline, so looking up throws further.
+
+The grenade cooks off on a fuse wherever it has bounced to, and does 0.30 damage
+at the edge of a 9 m radius rising to 1.45 at the centre. The molotov breaks on
+first contact instead — ground or wall — and leaves a pool that burns anyone
+standing in it at 0.55 a second for nine seconds, and sends them running. Three
+point lights are created once and re-pointed at whichever fires are nearest,
+because adding and removing lights forces every material to recompile.
 
 **Faces.** Four expressions drawn to canvas — happy, level, unhappy, wretched —
 one `InstancedMesh` each, with every person written into exactly one, so all
