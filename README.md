@@ -167,7 +167,15 @@ bare `Failed to fetch`. If you see that, you are blocked rather than offline; it
 clears on its own.
 
 Ways are deduplicated by OSM id across tiles, and tiles more than two cells away
-are disposed of, so a long wander does not grow without bound.
+are disposed of, so a long wander does not grow without bound. A way belongs to
+whichever tile first fetched it rather than to the ground beneath it, so anyone
+walking a street whose owning tile gets dropped is moved to the nearest live
+segment instead of blinking out.
+
+People are retired by distance from where they actually are. That sounds obvious
+and was not: the check originally measured from the first vertex of the segment
+they were walking, and a straight can run 260 m. On Bloemgracht someone standing
+77 m away measured 206 m by that rule and was culled in plain sight.
 
 **Collision.** Building footprints go into a 24 m spatial grid; movement is tested
 against the polygons in the neighbouring cells and slides along walls rather than

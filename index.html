@@ -2084,6 +2084,7 @@ const CORPSE_MAX = 45, MAX_BODIES = PEOPLE_MAX + CORPSE_MAX;
 let living = 0;
 let peopleOn = true, colorsDirty = true, spawnTimer = 0, gyCursor = 0, chatT = 3;
 const SPX = { chatTry:0, chatNear:0, chatPair:0, chatSaid:0, chaseSaid:0, blocked:0 };
+const GONE = { far:0, roadGone:0, rehomed:0, badIndex:0, stepFail:0, chaserFar:0 };
 const npcs = [];
 const junctions = new Map();
 const jkey = (x,y) => Math.round(x*2) + ',' + Math.round(y*2);
@@ -2276,6 +2277,29 @@ function hop(n, at){
   n.dir *= -1;                                    // dead end: turn on your heel
   if(n.dir > 0){ n.i = 0; n.u = 0; }
   else { n.i = n.r.pts.length - 2; n.u = segLen(n.r.pts[n.i], n.r.pts[n.i+1]); }
+  return true;
+}
+
+/* When a tile is dropped its ways are marked dead, and anyone walking one of
+   them would otherwise blink out — including in plain sight, because a way
+   belongs to whichever tile first fetched it, not to the ground under it. Put
+   them on the nearest live segment instead. */
+function rehome(n, p){
+  let best = null, bd = 30*30;
+  for(const c of nearSegs){
+    if(c.r.dead || c.i > c.r.pts.length-2) continue;
+    const a = c.r.pts[c.i], b = c.r.pts[c.i+1];
+    const vx = b.x-a.x, vy = b.y-a.y, L = vx*vx + vy*vy;
+    let t = L ? ((p.x-a.x)*vx + (p.y-a.y)*vy) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    const dx = p.x - (a.x + vx*t), dy = p.y - (a.y + vy*t);
+    const d2 = dx*dx + dy*dy;
+    if(d2 < bd){ bd = d2; best = { c, t, len: Math.sqrt(L) || 0.001 }; }
+  }
+  if(!best) return false;
+  n.r = best.c.r; n.i = best.c.i; n.u = best.t * best.len;
+  n.side = sidewalk(n.r); n.sx = 0; n.sy = 0;
+  GONE.rehomed++;
   return true;
 }
 
@@ -2573,7 +2597,7 @@ function updatePeopleInner(dt){
     if(n.swipeT > 0) n.swipeT = Math.max(0, n.swipeT - dt);
     if(n.chase || n.flee){
       const dx = player.x - n.px, dy = (-player.z) - n.py, d = Math.hypot(dx,dy) || 1;
-      if(d > DESPAWN){ npcs.splice(i,1); colorsDirty = true; continue; }
+      if(d > DESPAWN){ npcs.splice(i,1); colorsDirty = true; GONE.chaserFar++; continue; }
       const step = (n.flee ? -1 : 1) * n.speed * dt;
       if(n.flee || d > 0.75) stepFree(n, dx/d*step, dy/d*step);
       if(!n.flee){
@@ -2589,9 +2613,19 @@ function updatePeopleInner(dt){
       continue;
     }
     const pts = n.r.pts, a = pts[n.i], b = pts[n.i+1];
-    const gone = n.r.dead || !a || !b ||
-                 Math.hypot((a.x - player.x), (a.y + player.z)) > DESPAWN;
-    if(gone || !stepNPC(n, dt)){ npcs.splice(i,1); colorsDirty = true; }
+    if(!a || !b){ npcs.splice(i,1); colorsDirty = true; GONE.badIndex++; continue; }
+
+    if(n.r.dead && !rehome(n, npcPoint(n))){
+      npcs.splice(i,1); colorsDirty = true; GONE.roadGone++; continue;
+    }
+    // Measure from where the person actually is, not from the start of the
+    // segment they happen to be on: a straight can run 260 m, so the vertex
+    // can be well past the despawn radius while they are at your elbow.
+    const q = npcPoint(n);
+    if(q && Math.hypot(q.x - player.x, q.y + player.z) > DESPAWN){
+      npcs.splice(i,1); colorsDirty = true; GONE.far++; continue;
+    }
+    if(!stepNPC(n, dt)){ npcs.splice(i,1); colorsDirty = true; GONE.stepFail++; }
   }
   // fire once per raise of the gesture, not once per frame it is held
   const up = armsOn && ARM.flip > 0.6;
@@ -2995,7 +3029,7 @@ window.city = { THREE, scene, world, camera, renderer, player, tiles,
                   down:npcs.filter(n=>n.down).length,
                   fleeing:npcs.filter(n=>n.flee).length,
                   moods:[0,1,2,3].map(m=>faceOf&&npcs.filter(n=>faceOf(n)===m).length),
-                  boats:boatCount, houses:houseCount, spx:SPX, chatT:+chatT.toFixed(1),
+                  boats:boatCount, houses:houseCount, spx:SPX, gone:GONE, chatT:+chatT.toFixed(1),
                   onWater:npcs.filter(n=>{ if(n.down) return false;
                     const p=npcPoint(n); return p && waterAt(p.x,p.y)!==null
                                               && deckAt(p.x,-p.y) < -1e8; }).length,
