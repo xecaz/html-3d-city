@@ -3626,7 +3626,15 @@ async function suggest(q){
       const d = document.createElement('div');
       d.className = 'sug';
       const parts = s.display_name.split(', ');
-      d.innerHTML = `<b>${parts.slice(0,2).join(', ')}</b><i>${parts.slice(2).join(', ')}</i>`;
+      // Built as nodes, not markup. display_name comes from OpenStreetMap place
+      // names, which anyone may edit, so a place called <img onerror=...> would
+      // otherwise run in the visitor's page the moment it appeared in a search.
+      const head = document.createElement('b');
+      head.textContent = parts.slice(0, 2).join(', ');
+      const rest = document.createElement('i');
+      rest.textContent = parts.slice(2).join(', ');
+      d.appendChild(head);
+      d.appendChild(rest);
       d.onclick = ()=>{ el.sug.innerHTML=''; go(+s.lat, +s.lon, parts[0]); };
       el.sug.appendChild(d);
     }

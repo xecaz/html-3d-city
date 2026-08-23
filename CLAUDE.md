@@ -130,6 +130,21 @@ squinting at a picture.
 - **The render loop calls `pump()` every frame**, so a delay expressed as a
   `setTimeout` gets raced by the next frame. Gate on a timestamp instead.
 
+## Untrusted input
+
+Everything the page displays from the network is third-party data, and two
+sources are **editable by the public**: OpenStreetMap tags and the Nominatim
+`display_name` built from them. A place can be named anything, including markup.
+
+So text from OSM, Nominatim, timeapi or the DEM must reach the DOM as
+`textContent` or as constructed nodes, never as `innerHTML`. This has already
+bitten once: search suggestions built their two-line layout with a template
+literal, and a place called `<img src=x onerror=...>` executed in the visitor's
+page. Verified exploitable before the fix and inert after.
+
+`innerHTML` is fine for markup you wrote with values you generated — the stats
+counter interpolates two numbers — but never for a string that came off the wire.
+
 ## Conventions
 
 - Everything is relative to the landing point: `groundAt` returns 0 there, and
