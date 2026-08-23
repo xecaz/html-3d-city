@@ -57,7 +57,7 @@ The hash follows you as you walk, so any place you find is a shareable link.
 | <kbd>←</kbd> <kbd>→</kbd> | turn |
 | <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> | walk and strafe |
 | mouse | look around — click once to capture the pointer, <kbd>Esc</kbd> to release |
-| <kbd>Shift</kbd> | run |
+| <kbd>Shift</kbd> | run — 12 m/s against 1.9 walking |
 | <kbd>[</kbd> <kbd>]</kbd> | rewind / advance the sun by 15 minutes |
 | <kbd>F</kbd> | hold to express an opinion — they notice |
 | <kbd>1</kbd> | slap, and put away whatever you were holding |
@@ -173,6 +173,13 @@ the actual zone — that comes from a one-shot lookup on `timeapi.io`, after whi
 falls back to longitude, which stays solar-sane but drifts from the wall clock by
 the DST offset.
 
+**Service dots.** Four things are asked for over the network — map data,
+geocoding, elevation, time zone — and any of them can be having a bad day. Four
+dots in the top-left report what actually happened on the last call rather than
+pinging anything, so they cost nothing and cannot lie: grey untouched, amber in
+flight, green answered, red failed. They sit above the start screen too, so you
+can see a service is down before you go looking for a street.
+
 **Streaming, politely.** The world is 600 m tiles, and the grid is pinned to the
 globe rather than to wherever you searched from — so two visits to the same
 street ask for the same cells whatever address you arrived by, and the second
@@ -181,7 +188,9 @@ nothing at all.
 
 Tiles are fetched only when you can actually see into them: one while you are
 mid-cell, never more than four, instead of firing the whole surrounding nine the
-moment you land. One request is in flight at a time with a real pause between
+moment you land. The queue is drained nearest-first rather than oldest-first, and
+entries you have walked away from are dropped — walking into a new part of town
+should load the ground under your feet before the ground you left. One request is in flight at a time with a real pause between
 them, and Overpass pushing back triggers an exponential retreat rather than a
 retry storm. This matters — Overpass does not politely throttle a noisy client,
 it firewalls the IP, and a refused TCP connection surfaces in the browser as a
@@ -319,8 +328,14 @@ They manage 2.3–2.65 m/s against your 6 m/s run, so you can walk into trouble 
 you can always outrun it. Offence is taken on the rising edge of the gesture, so
 holding the key does not stack.
 
-They are spawned and retired in a ring around you, drawn from a shortlist of
-nearby segments that is refreshed as you move — sampling uniformly from every
+They are spawned and retired in a ring around you, on the nearest street that
+qualifies rather than the first one drawn: picking the first spreads people
+evenly over the whole 30–130 m ring, and since the streets behind you are already
+loaded while the ones ahead are not, that leaves the crowd where you came from.
+Walking 350 m from a standing start, the median distance from you settled at 39 m
+with not one person closer to where you began than to where you are.
+
+The shortlist itself is of nearby segments, refreshed as you move — sampling uniformly from every
 loaded road mostly misses, because the tiles cover well over a square kilometre.
 Population is topped up in a burst rather than one group per frame, so the crowd
 size does not depend on how fast your machine renders. Toggle them off on the

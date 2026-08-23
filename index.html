@@ -64,12 +64,22 @@
     text-shadow:0 2px 12px rgba(0,0,0,.9);letter-spacing:-.2px}
   #coords{position:absolute;left:20px;bottom:2px;font-size:11px;color:#b9c4cf;
     text-shadow:0 1px 8px #000;font-variant-numeric:tabular-nums}
-  #status{position:absolute;left:20px;top:18px;font-size:12px;color:#b9c4cf;
+  #status{position:absolute;left:20px;top:40px;font-size:12px;color:#b9c4cf;
     text-shadow:0 1px 8px #000}
-  #sunhud{position:absolute;left:20px;top:38px;font-size:12px;color:#b9c4cf;
+  #sunhud{position:absolute;left:20px;top:60px;font-size:12px;color:#b9c4cf;
     text-shadow:0 1px 8px #000;font-variant-numeric:tabular-nums}
-  #weapon{position:absolute;left:20px;top:58px;font-size:12px;color:#e8d9b0;
+  #weapon{position:absolute;left:20px;top:80px;font-size:12px;color:#e8d9b0;
     text-shadow:0 1px 8px #000}
+  /* always visible, including over the start screen, so you can see a service
+     is down before you go looking for a street */
+  #apis{position:fixed;left:20px;top:16px;z-index:45;display:flex;gap:11px;
+    font-size:10.5px;color:#8e9aa6;text-shadow:0 1px 6px #000;pointer-events:none}
+  #apis span{display:flex;align-items:center;gap:4px}
+  #apis i{width:7px;height:7px;border-radius:50%;background:#4d555d;
+    box-shadow:0 0 4px rgba(0,0,0,.9);transition:background .2s}
+  #apis i.busy{background:#e0a33c}
+  #apis i.ok{background:#48c96a}
+  #apis i.fail{background:#e2523f}
   #hit{position:absolute;inset:0;pointer-events:none;opacity:0;
     background:radial-gradient(120% 90% at 50% 50%,rgba(190,25,20,0) 35%,rgba(190,25,20,.85) 100%)}
   #charge{position:absolute;left:50%;top:calc(50% + 16px);transform:translateX(-50%);
@@ -99,6 +109,8 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+
+<div id="apis"></div>
 
 <div id="hud">
   <div id="status"></div>
@@ -183,12 +195,12 @@ const el = {
   loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
   street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
   rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), showPeople:$('#showpeople'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
-  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot'), say:$('#say'), charge:$('#charge')
+  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot'), say:$('#say'), charge:$('#charge'), apis:$('#apis')
 };
 
 /* ---------------------------------------------------------------- config */
 const EYE = 1.68;                 // camera height, metres
-const WALK = 1.9, RUN = 6.0;      // m/s
+const WALK = 1.9, RUN = 12.0;     // m/s
 const TURN = 1.9;                 // rad/s for arrow-key turning
 const BODY = 0.42;                // collision radius
 const M_LAT = 110574;             // metres per degree latitude
@@ -203,6 +215,33 @@ const PRESETS = [
   ['Le Marais, Paris', 48.8590, 2.3580],
   ['Manhattan, Midtown', 40.7549, -73.9840],
 ];
+
+/* --------------------------------------------------------- service health
+   Four things are asked for over the network and any of them can be having a
+   bad day. The dots report what actually happened on the last call rather than
+   pinging anything, so they cost nothing and never lie. */
+const API = {
+  overpass:  { label:'map',       state:'idle' },
+  nominatim: { label:'search',    state:'idle' },
+  terrain:   { label:'elevation', state:'idle' },
+  clock:     { label:'clock',     state:'idle' },
+};
+const apiDots = {};
+for(const k in API){
+  const span = document.createElement('span');
+  const dot = document.createElement('i');
+  span.appendChild(dot);
+  span.appendChild(document.createTextNode(API[k].label));
+  span.title = k;
+  el.apis.appendChild(span);
+  apiDots[k] = dot;
+}
+function apiMark(k, state){
+  const a = API[k];
+  if(!a || a.state === state) return;
+  a.state = state;
+  apiDots[k].className = state === 'idle' ? '' : state;
+}
 
 /* ------------------------------------------------------------ projection */
 let lat0 = 0, lon0 = 0, mLon = 1;
@@ -340,11 +379,13 @@ function zoneOffset(date){                       // hours east of UTC, fractiona
 }
 async function fetchZone(lat, lon){
   tzName = null;
+  apiMark('clock', 'busy');
   try {
     const r = await fetch(`https://timeapi.io/api/TimeZone/coordinate?latitude=${lat}&longitude=${lon}`);
     const j = await r.json();
     if(j && j.timeZone && Intl.DateTimeFormat('en-US',{timeZone:j.timeZone})) tzName = j.timeZone;
-  } catch(e){ /* longitude fallback is already in place */ }
+    apiMark('clock', 'ok');
+  } catch(e){ apiMark('clock', 'fail'); }   // longitude fallback is already in place
   updateSun();
 }
 
@@ -762,6 +803,7 @@ function query(s, w, n, e){
 
 async function overpass(q){
   let lastErr;
+  apiMark('overpass', 'busy');
   for(let attempt=0; attempt<OVERPASS.length; attempt++){
     const url = OVERPASS[(epIdx + attempt) % OVERPASS.length];
     try {
@@ -773,9 +815,11 @@ async function overpass(q){
       if(!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       epIdx = (epIdx + attempt) % OVERPASS.length;
+      apiMark('overpass', 'ok');
       return j;
     } catch(err){ lastErr = err; }
   }
+  apiMark('overpass', 'fail');
   throw lastErr || new Error('all Overpass endpoints failed');
 }
 
@@ -989,6 +1033,7 @@ function groundAt(x, z){
 
 async function loadDEM(){
   demReady = false; demGrid = null;
+  apiMark('terrain', 'busy');
   try {
     const dLat = DEM_SPAN / M_LAT, dLon = DEM_SPAN / mLon;
     const nw = lonLatToTile(lat0 + dLat, lon0 - dLon, DEM_Z);
@@ -999,7 +1044,7 @@ async function loadDEM(){
     for(let tx = tx0; tx <= tx1; tx++) for(let ty = ty0; ty <= ty1; ty++)
       jobs.push(loadDemTile(tx, ty).then(d => { if(d) tiles.set(tx+','+ty, d); }));
     await Promise.all(jobs);
-    if(!tiles.size) return;
+    if(!tiles.size){ apiMark('terrain', 'fail'); return; }
 
     const N = Math.round(DEM_SPAN*2 / DEM_STEP) + 1;
     const g = new Float32Array(N*N);
@@ -1021,7 +1066,11 @@ async function loadDEM(){
     demGrid = g; demN = N; demBase = 0;
     demReady = true;
     demBase = sampleGrid(0, 0);          // your landing point becomes y = 0
-  } catch(e){ console.warn('terrain unavailable, staying flat:', e); }
+    apiMark('terrain', 'ok');
+  } catch(e){
+    apiMark('terrain', 'fail');
+    console.warn('terrain unavailable, staying flat:', e);
+  }
 }
 
 /* =================================================================== speech
@@ -1280,13 +1329,15 @@ function say(cls, text, lang, pitch, rate, prio){
 
 async function fetchLocale(lat, lon){
   localeLang = 'en-GB';
+  apiMark('nominatim', 'busy');
   try {
     const r = await fetch('https://nominatim.openstreetmap.org/reverse'
       + `?format=jsonv2&zoom=8&lat=${lat}&lon=${lon}`, { headers:{ 'Accept-Language':'en' } });
     const j = await r.json();
     const cc = ((j && j.address && j.address.country_code) || '').toLowerCase();
     if(cc && LANG_BY_CC[cc]) localeLang = LANG_BY_CC[cc];
-  } catch(e){ /* stay with English */ }
+    apiMark('nominatim', 'ok');
+  } catch(e){ apiMark('nominatim', 'fail'); }   // stay with English
 }
 
 /* ---------------------------------------------------------------- tile cache
@@ -1371,7 +1422,7 @@ function tileAt(x, z){
 /* Cells the walker can currently see into. Fetching just these, instead of the
    whole 3x3 the moment you land, keeps the opening burst to one or two queries
    and lets the rest arrive only if you actually walk that way. */
-const LOOK_AHEAD = 250;   // 1 tile mid-cell, never more than 4
+const LOOK_AHEAD = 300;   // a little further, since running is now 12 m/s
 function neededTiles(){
   const R = LOOK_AHEAD;
   const sw = toLatLon(player.x - R, player.z + R);
@@ -1628,6 +1679,18 @@ async function pump(){
   // The render loop calls this every frame, so the delay has to live in a
   // timestamp — a bare setTimeout would just be raced by the next frame.
   if(pending > 0 || !queue.length || performance.now() < nextAt) return;
+  if(queue.length > 1){
+    // Take the nearest outstanding tile rather than the oldest. Walking into a
+    // new part of town should load the ground under your feet before the ground
+    // you left, or the streets around you stay empty while the ones behind you
+    // fill up.
+    const [ci, cj] = tileAt(player.x, player.z);
+    for(let k = queue.length-1; k >= 0; k--)
+      if(Math.abs(queue[k][0]-ci) > 2 || Math.abs(queue[k][1]-cj) > 2) queue.splice(k, 1);
+    queue.sort((a, b) => (a[0]-ci)*(a[0]-ci) + (a[1]-cj)*(a[1]-cj)
+                       - (b[0]-ci)*(b[0]-ci) - (b[1]-cj)*(b[1]-cj));
+  }
+  if(!queue.length) return;
   const [gi,gj] = queue.shift();
   pending++;
   let wait = GAP;
@@ -2730,8 +2793,13 @@ function refreshNear(){
 const sidewalk = r => r.foot ? (Math.random()-0.5)*1.1
                              : (Math.random()<0.5?-1:1) * ((r.w||5)/2 + 0.7 + Math.random()*0.5);
 
+/* Draw a handful of candidates and take the nearest of them. Picking the first
+   that qualifies spreads people evenly over the whole 30-130 m ring, and since
+   the streets behind you are loaded while the ones ahead are not yet, that puts
+   the crowd where you came from rather than where you are. */
 function pickSpawn(){
-  for(let tries = 0; tries < 24 && nearSegs.length; tries++){
+  let best = null, bd = Infinity, found = 0;
+  for(let tries = 0; tries < 40 && nearSegs.length; tries++){
     const c = nearSegs[(Math.random()*nearSegs.length)|0];
     if(c.r.dead || c.i > c.r.pts.length-2) continue;
     const a = c.r.pts[c.i], b = c.r.pts[c.i+1], len = segLen(a,b);
@@ -2740,9 +2808,10 @@ function pickSpawn(){
     const x = a.x + (b.x-a.x)*u/len, y = a.y + (b.y-a.y)*u/len;
     const d = Math.hypot(x - player.x, y + player.z);
     if(d < SPAWN_MIN || d > SPAWN_MAX) continue;
-    return { r: c.r, i: c.i, u };
+    if(d < bd){ bd = d; best = { r: c.r, i: c.i, u }; }
+    if(++found >= 5) break;
   }
-  return null;
+  return best;
 }
 
 function spawnGroup(){
@@ -3478,9 +3547,11 @@ async function suggest(q){
   const my = ++seq;
   const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=1&q='
             + encodeURIComponent(q);
+  apiMark('nominatim', 'busy');
   try {
     const r = await fetch(url, { headers:{ 'Accept-Language':'en' } });
     const j = await r.json();
+    apiMark('nominatim', 'ok');
     if(my !== seq) return;
     sugItems = j; sugSel = -1;
     el.sug.innerHTML = '';
@@ -3492,7 +3563,10 @@ async function suggest(q){
       d.onclick = ()=>{ el.sug.innerHTML=''; go(+s.lat, +s.lon, parts[0]); };
       el.sug.appendChild(d);
     }
-  } catch(err){ el.err.textContent = 'Geocoder unreachable: ' + err.message; }
+  } catch(err){
+    apiMark('nominatim', 'fail');
+    el.err.textContent = 'Geocoder unreachable: ' + err.message;
+  }
 }
 
 el.q.addEventListener('input', ()=>{
@@ -3568,6 +3642,7 @@ window.city = { THREE, scene, world, camera, renderer, player, tiles,
                                     throwT:+throwT.toFixed(2),
                                     name:(WEAPONS[weapon]||{}).name || 'hands' }), FACES, npcs, groundAt, blocked, waterAt, npcBlocked,
                 dem: () => ({ ready:demReady, n:demN, base:+demBase.toFixed(2) }),
+                api: () => Object.fromEntries(Object.entries(API).map(([k,v]) => [k, v.state])),
                 speech: () => ({ lang:localeLang, voices:voices.length,
                                  voice:(pickVoice(localeLang)||{}).name || null,
                                  phrases:(ANGRY_LINES[localeLang.split('-')[0]]||ANGRY_LINES.en).length }),
