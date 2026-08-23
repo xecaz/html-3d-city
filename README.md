@@ -91,10 +91,32 @@ Worth splitting the cache headers, since the two files age very differently:
 once, ever, and is byte-identical to the upstream release. Telling the browser
 so means a returning visitor re-fetches 160 kB rather than 830 kB.
 
+Apache — as `/etc/apache2/conf-available/htmlcity.conf`, then `a2enmod headers`
+and `a2enconf htmlcity`. Putting it in `conf-available` rather than a vhost
+avoids a trap: on a site that redirects port 80 to HTTPS, the `:80` vhost never
+serves a file, so headers added there do nothing.
+
+```apache
+<Directory "/var/www/example.com/htmlcity">
+    <FilesMatch "\.html$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+</Directory>
+
+<Directory "/var/www/example.com/htmlcity/vendor">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+</Directory>
+```
+
+nginx:
+
 ```nginx
 location = /htmlcity/index.html      { add_header Cache-Control "no-cache"; }
 location ^~ /htmlcity/vendor/        { add_header Cache-Control "public, max-age=31536000, immutable"; }
 ```
+
+`immutable` means the browser will not revalidate at all, so if you ever bump the
+three.js version, change the filename with it or cached copies will linger.
 
 That is also the argument against inlining three.js into the page: it would
 chain a never-changing 672 kB to a frequently-changing 160 kB.
