@@ -173,6 +173,11 @@ the actual zone — that comes from a one-shot lookup on `timeapi.io`, after whi
 falls back to longitude, which stays solar-sane but drifts from the wall clock by
 the DST offset.
 
+**Reading the HUD.** A weapon bar along the bottom, built from the same table
+the number keys read so it cannot drift out of step with them, with the selected
+slot lit. A counter top-left for how many people are about and how many you have
+killed, reset when you change location. And:
+
 **Service dots.** Four things are asked for over the network — map data,
 geocoding, elevation, time zone — and any of them can be having a bad day. Four
 dots in the top-left report what actually happened on the last call rather than
@@ -197,8 +202,14 @@ it firewalls the IP, and a refused TCP connection surfaces in the browser as a
 bare `Failed to fetch`. If you see that, you are blocked rather than offline; it
 clears on its own.
 
-Ways are deduplicated by OSM id across tiles, and tiles more than two cells away
-are disposed of, so a long wander does not grow without bound. A way belongs to
+Ways are deduplicated by OSM id across tiles, and tiles are disposed of once
+everything they built is more than 900 m from you — by where the geometry
+actually is, not by which cell it was fetched for. Overpass returns every way
+that *touches* a tile, with its full geometry, so a tile can own something far
+larger than itself: the IJ is a single polygon 1792 m across. Disposing on grid
+distance deleted that polygon while you were still standing on its bank. A hard
+cap sheds the furthest tiles as a backstop, since a few own enough geometry that
+they would otherwise never qualify. A way belongs to
 whichever tile first fetched it rather than to the ground beneath it, so anyone
 walking a street whose owning tile gets dropped is moved to the nearest live
 segment instead of blinking out.

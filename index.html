@@ -70,6 +70,12 @@
     text-shadow:0 1px 8px #000;font-variant-numeric:tabular-nums}
   #weapon{position:absolute;left:20px;top:80px;font-size:12px;color:#e8d9b0;
     text-shadow:0 1px 8px #000}
+  #stats{position:absolute;left:20px;top:102px;font-size:11.5px;color:#c3ced9;
+    background:rgba(10,13,17,.55);border:1px solid rgba(255,255,255,.10);
+    border-radius:7px;padding:4px 10px;font-variant-numeric:tabular-nums;
+    text-shadow:0 1px 6px #000}
+  #stats b{color:#fff;font-weight:600}
+  #stats .k{color:#ff9d92}
   /* always visible, including over the start screen, so you can see a service
      is down before you go looking for a street */
   #apis{position:fixed;left:20px;top:16px;z-index:45;display:flex;gap:11px;
@@ -102,6 +108,14 @@
   #say .me{color:#ffd9a8}
   #say .them{color:#ff9d92}
   #say .chat{color:#b9c4cf;font-size:14px;font-weight:500;opacity:.85}
+  #wbar{position:absolute;left:50%;bottom:30px;transform:translateX(-50%);
+    display:flex;gap:6px;pointer-events:none}
+  #wbar span{display:flex;align-items:center;gap:5px;font-size:11.5px;padding:5px 9px;
+    border-radius:7px;color:#8e9aa6;background:rgba(10,13,17,.55);
+    border:1px solid rgba(255,255,255,.08);text-shadow:0 1px 6px #000;white-space:nowrap}
+  #wbar span.on{color:#fff;background:rgba(240,160,75,.22);border-color:rgba(240,160,75,.8)}
+  #wbar b{color:#5f6c78;font-weight:700}
+  #wbar span.on b{color:#f0a04b}
   #attrib{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);font-size:10.5px;
     color:#7d8894;text-shadow:0 1px 6px #000}
   #attrib a{color:#9aa7b3}
@@ -116,6 +130,7 @@
   <div id="status"></div>
   <div id="sunhud"></div>
   <div id="weapon"></div>
+  <div id="stats"></div>
   <div id="dot"></div>
   <div id="charge"><i></i></div>
   <div id="hit"></div>
@@ -124,15 +139,13 @@
     <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + mouse look</div>
     <div><kbd>Shift</kbd> run &nbsp; <kbd>Esc</kbd> free cursor</div>
     <div><kbd>[</kbd><kbd>]</kbd> rewind / advance the sun &nbsp; <kbd>F</kbd> gesture</div>
-    <div><kbd>1</kbd> slap &nbsp; <kbd>2</kbd> pistol &nbsp; <kbd>3</kbd> minigun</div>
-    <div><kbd>4</kbd> shotgun &nbsp; <kbd>5</kbd> AK-47</div>
-    <div><kbd>6</kbd> grenade &nbsp; <kbd>7</kbd> molotov &nbsp; <kbd>8</kbd> spell book</div>
-    <div><kbd>Space</kbd> fire &nbsp; — hold to throw further</div>
+    <div><kbd>Space</kbd> fire &nbsp; — hold to throw or charge</div>
   </div>
   <button id="back">← new location</button>
   <div id="street"></div>
   <div id="coords"></div>
   <canvas id="map" width="380" height="380"></canvas>
+  <div id="wbar"></div>
   <div id="say"></div>
   <div id="attrib">geometry © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors · search by Nominatim</div>
 </div>
@@ -195,7 +208,7 @@ const el = {
   loader:$('#loader'), ltext:$('#ltext'), hud:$('#hud'), status:$('#status'),
   street:$('#street'), coords:$('#coords'), map:$('#map'), back:$('#back'),
   rad:$('#rad'), sh:$('#sh'), showArms:$('#showarms'), showPeople:$('#showpeople'), live:$('#livetime'), hour:$('#hour'), hourlbl:$('#hourlbl'),
-  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot'), say:$('#say'), charge:$('#charge'), apis:$('#apis')
+  sun:$('#sunhud'), weapon:$('#weapon'), hit:$('#hit'), dot:$('#dot'), say:$('#say'), charge:$('#charge'), apis:$('#apis'), stats:$('#stats'), wbar:$('#wbar')
 };
 
 /* ---------------------------------------------------------------- config */
@@ -900,6 +913,8 @@ const roads     = [];              // {name, pts, tile}
 const bridges   = [];              // {pts, hs, w, tile} — decks you can walk over
 let   pathsDirty = true;           // roads changed; the junction map needs rebuilding
 let   boatCount = 0, houseCount = 0;
+let   killed = 0;
+function kill(n){ n.down = true; n.fall = 0; killed++; colorsDirty = true; }
 let grid = new Map();
 const CELL = 24;
 const gk = (cx,cy) => cx + ',' + cy;
@@ -1423,6 +1438,8 @@ function tileAt(x, z){
    whole 3x3 the moment you land, keeps the opening burst to one or two queries
    and lets the rest arrive only if you actually walk that way. */
 const LOOK_AHEAD = 300;   // a little further, since running is now 12 m/s
+// keep a tile while anything it built is within this of you; hard cap beyond
+const TILE_KEEP = 900, TILE_CAP = 44;
 function neededTiles(){
   const R = LOOK_AHEAD;
   const sw = toLatLon(player.x - R, player.z + R);
@@ -1614,9 +1631,21 @@ function buildTile(json, gi, gj, bb){
   if(land.empty) addFlat(land, [rect], 0, [1,1,1], 0.35, true);  // holes defeated earcut
 
   const g = new THREE.Group();
+  // Overpass returns every way that *touches* the tile, with its full geometry,
+  // so a tile can own something far larger than itself — the IJ is a single
+  // polygon 1792 m across. Remember the real extent, or disposing this tile
+  // would delete that polygon while you are still standing on its bank.
+  const ext = { x0: lx0, x1: lx1, z0: -ly1, z1: -ly0 };
   const push = (buf, mat, shadow) => {
     if(buf.empty) return;
-    const m = new THREE.Mesh(buf.geometry(), mat);
+    const geo = buf.geometry();
+    geo.computeBoundingBox();
+    const bb2 = geo.boundingBox;
+    if(bb2){
+      ext.x0 = Math.min(ext.x0, bb2.min.x); ext.x1 = Math.max(ext.x1, bb2.max.x);
+      ext.z0 = Math.min(ext.z0, bb2.min.z); ext.z1 = Math.max(ext.z1, bb2.max.z);
+    }
+    const m = new THREE.Mesh(geo, mat);
     m.castShadow = !!shadow; m.receiveShadow = true;
     g.add(m);
   };
@@ -1628,7 +1657,7 @@ function buildTile(json, gi, gj, bb){
   push(walls, MAT.wall,  true);
   push(roofs, MAT.roof,  true);
   world.add(g);
-  tiles.set(key, { group:g, ways:wayIds, state:'ready' });
+  tiles.set(key, { group:g, ways:wayIds, state:'ready', ext });
   return count;
 }
 
@@ -1746,6 +1775,20 @@ const WEAPONS = [
 ];
 const isThrown = () => !!(WEAPONS[weapon] && WEAPONS[weapon].thrown);
 const isBeam   = () => !!(WEAPONS[weapon] && WEAPONS[weapon].beam);
+
+/* The weapon bar, built from the same table the weapons come from so it can
+   never drift out of step with what the number keys actually do. */
+const wbarEls = [];
+for(let i = 0; i < WEAPONS.length; i++){
+  const sp = document.createElement('span');
+  const b = document.createElement('b');
+  b.textContent = i + 1;                      // slot 0 is on key 1
+  sp.appendChild(b);
+  sp.appendChild(document.createTextNode(i === 0 ? 'fists' : WEAPONS[i].name));
+  el.wbar.appendChild(sp);
+  wbarEls.push(sp);
+}
+
 const CHARGE_TIME = 1.1, THROW_DUR = 0.30;
 const FUSE = 2.3, BLAST_R = 9, MAX_NADES = 8;
 // fire spreads for a moment, burns for a while, then dies back
@@ -2348,7 +2391,7 @@ function updateFires(dt){
       const p = npcPoint(n); if(!p) continue;
       if(Math.hypot(p.x - f.x, p.y + f.z) > R) continue;
       n.hp = Math.max(0, n.hp - FIRE_DPS * dt);
-      if(n.hp === 0){ n.down = true; n.fall = 0; colorsDirty = true; }
+      if(n.hp === 0) kill(n);
       else panic(n, p);
     }
     if(Math.hypot(f.x - player.x, f.z - player.z) < R){
@@ -2380,7 +2423,7 @@ function detonate(x, y, z){
     if(d > BLAST_R) continue;
     const f = 1 - d / BLAST_R;                        // nearer hurts more
     n.hp = Math.max(0, n.hp - (0.30 + f * 1.15));
-    if(n.hp === 0){ n.down = true; n.fall = 0; }
+    if(n.hp === 0) kill(n);
     else takeOffence(n, p);
   }
   colorsDirty = true;
@@ -2469,7 +2512,7 @@ function updateBeam(dt){
     const p = npcPoint(n); if(!p) continue;
     if(Math.hypot(p.x - sx, p.y - pn) > w.radius) continue;
     n.hp = Math.max(0, n.hp - w.dps * dt);
-    if(n.hp === 0){ n.down = true; n.fall = 0; colorsDirty = true; }
+    if(n.hp === 0) kill(n);
     else panic(n, p);
   }
   if(Math.hypot(sx - player.x, sz - player.z) < w.radius){
@@ -2980,7 +3023,7 @@ function damageAt(range, radius, amount, maxTargets){
   for(let i = 0; i < k; i++){
     const n = hits[i].n;
     n.hp = Math.max(0, n.hp - amount);
-    if(n.hp === 0){ n.down = true; n.fall = 0; }
+    if(n.hp === 0) kill(n);
     else takeOffence(n, null);
   }
   colorsDirty = true;
@@ -3380,9 +3423,24 @@ function frame(){
     pump();
     if(tiles.size > 26){
       const [ci,cj] = tileAt(player.x, player.z);
+      const keep = [];
       for(const k of [...tiles.keys()]){
-        const [a,b] = k.split(',').map(Number);
-        if(Math.abs(a-ci) > 2 || Math.abs(b-cj) > 2) disposeTile(k);
+        const t = tiles.get(k);
+        if(!t || t.state !== 'ready'){ continue; }
+        // distance from you to the nearest point of what this tile actually
+        // built, not to the cell it was fetched for
+        const e = t.ext;
+        const dx = Math.max(e.x0 - player.x, 0, player.x - e.x1);
+        const dz = Math.max(e.z0 - player.z, 0, player.z - e.z1);
+        const d = Math.hypot(dx, dz);
+        if(d > TILE_KEEP) disposeTile(k);
+        else keep.push({ k, d });
+      }
+      // backstop: a few tiles own very large geometry and would never qualify,
+      // so cap the total and shed the furthest by content distance
+      if(tiles.size > TILE_CAP){
+        keep.sort((a,b) => b.d - a.d);
+        for(let i = 0; i < keep.length && tiles.size > TILE_CAP; i++) disposeTile(keep[i].k);
       }
     }
   }
@@ -3436,6 +3494,8 @@ function frame(){
       ? WEAPONS[weapon].name + ' — Space fires, 1 puts it away'
       : 'bare hands — 1 slaps, 2-5 draws';
     el.dot.style.display = weapon ? 'block' : 'none';
+    for(let i = 0; i < wbarEls.length; i++) wbarEls[i].classList.toggle('on', i === weapon);
+    el.stats.innerHTML = 'people <b>' + living + '</b> · killed <b class="k">' + killed + '</b>';
     el.charge.style.display = isThrown() ? 'block' : 'none';
     syncHash();
   }
@@ -3460,7 +3520,7 @@ function resetWorld(){
   for(const k of [...tiles.keys()]) disposeTile(k);
   tiles.clear(); seen.clear(); queue.length = 0;
   colliders.length = 0; roads.length = 0; bridges.length = 0; rebuildGrid();
-  boatCount = 0; houseCount = 0;
+  boatCount = 0; houseCount = 0; killed = 0;
   npcs.length = 0; junctions.clear(); pathsDirty = true; colorsDirty = true;
   for(const g of nades) scene.remove(g.m);
   for(const b of blasts){ scene.remove(b.m); b.m.material.dispose(); }

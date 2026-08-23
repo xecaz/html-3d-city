@@ -79,6 +79,23 @@ table, and the parser sailed straight past it.
 Note esprima predates optional chaining, so `?.` will read as a syntax error.
 The code avoids it for that reason.
 
+**Neither check catches a temporal-dead-zone error**, and that one takes the
+whole page down: reference a `const` declared further down the module and it
+throws at load, `window.city` never appears, and every symptom looks unrelated —
+a dead search box, no crowd, nothing rendering. It has happened here, building
+the weapon bar from `WEAPONS` before `WEAPONS` was declared. So finish with a
+runtime smoke test that proves the module actually executed:
+
+```js
+typeof window.city === 'object'          // the module reached its last line
+document.querySelectorAll('#wbar span')  // things built from later constants
+!!city.renderer.getContext()             // WebGL came up
+```
+
+Load the page headless, wait a few seconds, assert those and that no exception
+was thrown. It takes about five seconds and catches a class of fault that no
+amount of static checking will.
+
 For anything visual or behavioural, drive a real browser over the DevTools
 protocol: launch headless Chrome with `--remote-debugging-port`, attach by
 WebSocket, and read state out of `window.city` (see below). Screenshots are
@@ -107,6 +124,9 @@ squinting at a picture.
   list *after* it runs, not before.
 - **Country codes are not language codes.** `ar` is Argentina, `sv` is El
   Salvador, `se` is Sweden, `no` is Norway. Getting this wrong is silent.
+- **Where you insert code matters as much as what it says.** The module is one
+  long scope, so anything built at load time must sit below the constants it
+  reads. Prefer to put new setup next to the data it depends on.
 - **The render loop calls `pump()` every frame**, so a delay expressed as a
   `setTimeout` gets raced by the next frame. Gate on a timestamp instead.
 
