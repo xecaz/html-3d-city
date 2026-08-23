@@ -185,6 +185,21 @@ pinging anything, so they cost nothing and cannot lie: grey untouched, amber in
 flight, green answered, red failed. They sit above the start screen too, so you
 can see a service is down before you go looking for a street.
 
+**Why the cache is in the browser.** Each visitor talks to Overpass directly and
+keeps what they get in their own IndexedDB. That means N visitors cost Overpass
+N queries — but from N different addresses, so no single one is ever the noisy
+client. Putting a cache on the server inverts that: total queries collapse to
+roughly one per tile ever, which is kinder in aggregate, but every request then
+leaves from one IP, and Overpass does not throttle a noisy client so much as
+firewall it. Concentrating the misses concentrates the risk.
+
+If you do want it, requests are sent as GET rather than POST — about 1.5 kB of
+URL, well inside any limit — precisely so an ordinary HTTP cache can key on
+them; a POST body is not a cache key anywhere without special configuration. Set
+`OSM_PROXY` near the top of the file to a path on your own origin and it is
+tried first, with the public mirrors left as the fallback. Nothing else changes,
+and with it empty the page stays hostable anywhere static.
+
 **Streaming, politely.** The world is 600 m tiles, and the grid is pinned to the
 globe rather than to wherever you searched from — so two visits to the same
 street ask for the same cells whatever address you arrived by, and the second

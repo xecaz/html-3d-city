@@ -790,7 +790,14 @@ function addRibbon(buf, pts0, width, y, col){
 }
 
 /* ==================================================================== OSM */
+/* Point this at a path on your own origin to put a cache in front of Overpass —
+   see the README for an nginx recipe. Left empty the page talks to the public
+   mirrors directly, which is what keeps it hostable anywhere static. Whatever
+   you set is tried first; the mirrors stay as the fallback, so a cache that is
+   down costs a round trip rather than the map. */
+const OSM_PROXY = '';
 const OVERPASS = [
+  ...(OSM_PROXY ? [OSM_PROXY] : []),
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
@@ -820,11 +827,11 @@ async function overpass(q){
   for(let attempt=0; attempt<OVERPASS.length; attempt++){
     const url = OVERPASS[(epIdx + attempt) % OVERPASS.length];
     try {
-      const r = await fetch(url, {
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'data=' + encodeURIComponent(q)
-      });
+      // GET rather than POST: the query is about 1.5 kB as a URL, well inside
+      // any server's limit, and it is what lets an ordinary HTTP cache — nginx,
+      // Varnish, a CDN — sit in front of this at all. A POST body is not a
+      // cache key anywhere without special configuration.
+      const r = await fetch(url + '?data=' + encodeURIComponent(q));
       if(!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       epIdx = (epIdx + attempt) % OVERPASS.length;
