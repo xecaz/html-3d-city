@@ -73,6 +73,27 @@ your own arms are drawn, whether anyone else is about, and the hour — which
 defaults to one in the afternoon so you land in daylight. Tick **sun at local
 time now** to get the real sun for the current moment instead.
 
+### What has to be on the server
+
+Two things, and the second is easy to forget:
+
+```
+index.html
+vendor/three.module.min.js      ← the page will not start without this
+vendor/LICENSE-three.txt        ← not needed to run; ship it anyway, three.js is MIT
+```
+
+`screenshots/` is only for this README and does not need deploying. There are no
+other local files: everything else the page uses comes from the APIs above.
+
+If `vendor/` is missing the import map fails, the module never executes, and the
+symptom is a page that renders but does nothing — the search box in particular
+just sits there. Check it directly rather than guessing:
+
+```bash
+curl -o /dev/null -w '%{http_code}\n' https://your.site/htmlcity/vendor/three.module.min.js
+```
+
 ## Where the data comes from
 
 Everything is public and free, and nothing is scraped.
