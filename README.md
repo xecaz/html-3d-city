@@ -86,6 +86,19 @@ vendor/LICENSE-three.txt        ← not needed to run; ship it anyway, three.js 
 `screenshots/` is only for this README and does not need deploying. There are no
 other local files: everything else the page uses comes from the APIs above.
 
+Worth splitting the cache headers, since the two files age very differently:
+`index.html` changes with every edit, while the vendored library has changed
+once, ever, and is byte-identical to the upstream release. Telling the browser
+so means a returning visitor re-fetches 160 kB rather than 830 kB.
+
+```nginx
+location = /htmlcity/index.html      { add_header Cache-Control "no-cache"; }
+location ^~ /htmlcity/vendor/        { add_header Cache-Control "public, max-age=31536000, immutable"; }
+```
+
+That is also the argument against inlining three.js into the page: it would
+chain a never-changing 672 kB to a frequently-changing 160 kB.
+
 If `vendor/` is missing the import map fails, the module never executes, and the
 symptom is a page that renders but does nothing — the search box in particular
 just sits there. Check it directly rather than guessing:
