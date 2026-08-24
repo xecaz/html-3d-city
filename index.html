@@ -906,6 +906,15 @@ const WALKABLE = new Set(['primary','secondary','tertiary','unclassified','resid
   'living_street','pedestrian','footway','path','cycleway','steps','service','track']);
 const FOOT = new Set(['pedestrian','footway','path','steps','track']);
 
+/* Tag values arrive from OpenStreetMap, which anyone may edit, so they are not
+   safe to use as plain-object keys: highway=constructor finds a name on
+   Object.prototype, which is truthy but is not a table entry, and destructuring
+   it throws. Own keys only -- WALKABLE and FOOT below are Sets for the same
+   reason. */
+const lookup = (table, key) =>
+  (typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key))
+    ? table[key] : undefined;
+
 const ROAD = {
   motorway:[14,0x5b5c60], trunk:[13,0x5b5c60], primary:[11,0x60605f], secondary:[9.5,0x5c5d61],
   tertiary:[8,0x5a5b5f], unclassified:[6.5,0x565759], residential:[6.5,0x565759],
@@ -1301,7 +1310,7 @@ function readable(text){
 }
 
 const pick = a => a[(Math.random()*a.length)|0];
-const linesFor = table => table[localeLang.split('-')[0]] || table.en;
+const linesFor = table => lookup(table, localeLang.split('-')[0]) || table.en;
 
 let localeLang = 'en-GB', voices = [];
 function refreshVoices(){
@@ -1357,7 +1366,8 @@ async function fetchLocale(lat, lon){
       + `?format=jsonv2&zoom=8&lat=${lat}&lon=${lon}`, { headers:{ 'Accept-Language':'en' } });
     const j = await r.json();
     const cc = ((j && j.address && j.address.country_code) || '').toLowerCase();
-    if(cc && LANG_BY_CC[cc]) localeLang = LANG_BY_CC[cc];
+    const lang = lookup(LANG_BY_CC, cc);
+    if(lang) localeLang = lang;
     apiMark('nominatim', 'ok');
   } catch(e){ apiMark('nominatim', 'fail'); }   // stay with English
 }
@@ -1506,6 +1516,9 @@ function buildTile(json, gi, gj, bb){
       const ml = parseFloat(tags['building:min_level']);
       min = isFinite(ml) ? ml * 3.25 : 0;
     }
+    // height is clamped, so min_height must be too, or building:min_level=99999
+    // (a plausible typo, never mind a bad edit) puts a wall through the sky.
+    min = Math.max(0, Math.min(min, 400));
     h = Math.max(min + 2.2, Math.min(h, 400));
     const gr = ringGround(rings[0] || []);
     // A "building" whose footprint sits on the water is a boat, not a house —
@@ -1576,52 +1589,62 @@ function buildTile(json, gi, gj, bb){
   }
 
   // ---- ways
+  let skipped = 0;
   for(const w of ways.values()){
     const t = w.tags;
     if(!t) continue;
     if(seen.has(w.id)) continue;
     const closed = w.nodes.length > 3 && w.nodes[0] === w.nodes[w.nodes.length-1];
 
-    if((t.building || t['building:part']) && closed){
-      seen.add(w.id); wayIds.add(w.id);
-      buildingFrom([ringOf(w.nodes, nodes)], t, w.id);
-    }
-    else if(t.highway && ROAD[t.highway]){
-      seen.add(w.id); wayIds.add(w.id);
-      const pts = ringOf(w.nodes, nodes);
-      if(closed && (t.area === 'yes' || t.highway === 'pedestrian')){
-        addFlat(road, [pts], 0.05, [1,1,1], 0.12, true);
-      } else if(pts.length > 1){
-        const src = w.nodes.map(id=>nodes.get(id)).filter(Boolean)
-                     .map(n=>{ const p = toLocal(n.lat,n.lon); return {x:p.x, y:-p.z}; });
-        const [wd, cl] = ROAD[t.highway];
-        const lanes = parseFloat(t.lanes);
-        const width = isFinite(lanes) ? Math.max(wd, lanes*3.1) : wd;
-        const c = new THREE.Color(cl);
-        if(t.bridge && t.bridge !== 'no'){
-          const bp = densify(src, 2.5);
-          const arch = bridgeProfile(bp, 1.45);
-          // lift the whole span onto the ground it springs from
-          const hs = arch.map((a, k) => a + groundAt(bp[k].x, -bp[k].y));
-          addBridge(road, bp, hs, width, [c.r*1.06, c.g*1.06, c.b*1.06]);
-          bridges.push({ pts:bp, hs, w:width/2 + 1.0, tile:key });
-        } else {
-          addRibbon(road, src, width, 0.04 + (t.highway==='footway'?0.01:0), [c.r,c.g,c.b]);
-        }
-        roads.push({ name:t.name, pts:src, tile:key, w:width,
-                     foot: FOOT.has(t.highway), walk: WALKABLE.has(t.highway) });
-        pathsDirty = true;
+    try {
+      if((t.building || t['building:part']) && closed){
+        seen.add(w.id); wayIds.add(w.id);
+        buildingFrom([ringOf(w.nodes, nodes)], t, w.id);
       }
-    }
-    else if(closed && (t.leisure || /^(grass|forest|meadow|village_green|recreation_ground|cemetery)$/.test(t.landuse||''))){
-      seen.add(w.id); wayIds.add(w.id);
-      addFlat(green, [ringOf(w.nodes, nodes)], 0.03, [1,1,1], 0.06, true);
-    }
-    else if(closed && t.amenity === 'parking'){
-      seen.add(w.id); wayIds.add(w.id);
-      addFlat(road, [ringOf(w.nodes, nodes)], 0.03, [0.62,0.62,0.63], 0.12, true);
+      else if(lookup(ROAD, t.highway)){
+        seen.add(w.id); wayIds.add(w.id);
+        const pts = ringOf(w.nodes, nodes);
+        if(closed && (t.area === 'yes' || t.highway === 'pedestrian')){
+          addFlat(road, [pts], 0.05, [1,1,1], 0.12, true);
+        } else if(pts.length > 1){
+          const src = w.nodes.map(id=>nodes.get(id)).filter(Boolean)
+                       .map(n=>{ const p = toLocal(n.lat,n.lon); return {x:p.x, y:-p.z}; });
+          const [wd, cl] = lookup(ROAD, t.highway);
+          const lanes = parseFloat(t.lanes);
+          const width = isFinite(lanes) ? Math.max(wd, lanes*3.1) : wd;
+          const c = new THREE.Color(cl);
+          if(t.bridge && t.bridge !== 'no'){
+            const bp = densify(src, 2.5);
+            const arch = bridgeProfile(bp, 1.45);
+            // lift the whole span onto the ground it springs from
+            const hs = arch.map((a, k) => a + groundAt(bp[k].x, -bp[k].y));
+            addBridge(road, bp, hs, width, [c.r*1.06, c.g*1.06, c.b*1.06]);
+            bridges.push({ pts:bp, hs, w:width/2 + 1.0, tile:key });
+          } else {
+            addRibbon(road, src, width, 0.04 + (t.highway==='footway'?0.01:0), [c.r,c.g,c.b]);
+          }
+          roads.push({ name:t.name, pts:src, tile:key, w:width,
+                       foot: FOOT.has(t.highway), walk: WALKABLE.has(t.highway) });
+          pathsDirty = true;
+        }
+      }
+      else if(closed && (t.leisure || /^(grass|forest|meadow|village_green|recreation_ground|cemetery)$/.test(t.landuse||''))){
+        seen.add(w.id); wayIds.add(w.id);
+        addFlat(green, [ringOf(w.nodes, nodes)], 0.03, [1,1,1], 0.06, true);
+      }
+      else if(closed && t.amenity === 'parking'){
+        seen.add(w.id); wayIds.add(w.id);
+        addFlat(road, [ringOf(w.nodes, nodes)], 0.03, [0.62,0.62,0.63], 0.12, true);
+      }
+    } catch(err){
+      // Everything above is third-party data, and the tile is written to the
+      // cache before it is built -- so an exception that escaped here would not
+      // just lose this tile, it would lose it again on every reload until the
+      // cache expired two weeks later. One unusable way costs one way.
+      skipped++;
     }
   }
+  if(skipped) console.warn(`tile ${gi}/${gj}: skipped ${skipped} unusable way(s)`);
 
   // Land for this tile, with the canals punched out of it. One flat quad per
   // tile tiles seamlessly with its neighbours and leaves the water visible.
@@ -3720,7 +3743,7 @@ window.city = { THREE, scene, world, camera, renderer, player, tiles,
                 api: () => Object.fromEntries(Object.entries(API).map(([k,v]) => [k, v.state])),
                 speech: () => ({ lang:localeLang, voices:voices.length,
                                  voice:(pickVoice(localeLang)||{}).name || null,
-                                 phrases:(ANGRY_LINES[localeLang.split('-')[0]]||ANGRY_LINES.en).length }),
+                                 phrases:linesFor(ANGRY_LINES).length }),
                 say, flipOff, LANG_BY_CC, ANGRY_LINES, CHASE_LINES, CHAT_LINES, MY_LINES,
                 ROMAN, readable, missing: () => missingScripts.map(String), PARTS, BARS, BLOOD, junctions, npcPoint,
                 peopleDebug: () => ({ npcs:npcs.length, nearSegs:nearSegs.length,

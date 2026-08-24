@@ -145,6 +145,23 @@ page. Verified exploitable before the fix and inert after.
 `innerHTML` is fine for markup you wrote with values you generated — the stats
 counter interpolates two numbers — but never for a string that came off the wire.
 
+Markup is not the only way public data bites. A tag value is also **not safe as
+a plain-object key**: `ROAD[t.highway]` with `highway=constructor` finds a name
+on `Object.prototype` — truthy, but not a table entry — and destructuring it
+threw, killing the tile build. Because a tile is written to the cache *before*
+it is built, that blanked the whole world and kept blanking it on every reload
+until the cache expired. One tag edit, by anyone with an OSM account.
+
+Look up wire strings with `lookup(table, key)`, which checks own keys only, or
+use a `Set`/`Map` as `WALKABLE` and `FOOT` already do. And note the shape of the
+failure: it was **silent** — no console error, no status banner, just an empty
+city. The per-way `try/catch` in `buildTile` now contains it, so one unusable
+way costs one way and says so.
+
+Numbers off the wire need the same suspicion: parse with `parseLen`, test with
+`isFinite`, and **clamp both ends**. `height` was clamped and `min_height` was
+not, so `building:min_level=99999` put a wall through the sky.
+
 ## Conventions
 
 - Everything is relative to the landing point: `groundAt` returns 0 there, and
